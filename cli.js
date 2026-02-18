@@ -4,6 +4,7 @@ const { readStdin } = require('./lib/io')
 const { install, uninstall } = require('./lib/install')
 const { init, deinit } = require('./lib/init')
 const { run } = require('./lib/run')
+const { doctor } = require('./lib/doctor')
 
 const VERSION = require('./package.json').version
 
@@ -15,6 +16,7 @@ Commands:
   uninstall   Remove turbocommit from settings
   init        Create .claude/turbocommit.json in current git repo
   deinit      Remove .claude/turbocommit.json
+  doctor      Check hook and config health
   run         Hook entry point (reads stdin, auto-commits)
   help        Show this help text
   --version   Show version
@@ -22,6 +24,7 @@ Commands:
 Usage:
   turbocommit install     # set up the global hook
   turbocommit init        # enable in a project
+  turbocommit doctor      # verify everything is wired correctly
   turbocommit run         # called by Claude Code (not manually)
 `
 
@@ -33,6 +36,8 @@ function main (argv) {
       return cmdInstall()
     case 'uninstall':
       return cmdUninstall()
+    case 'doctor':
+      return cmdDoctor()
     case 'init':
       return cmdInit()
     case 'deinit':
@@ -114,6 +119,17 @@ function cmdDeinit () {
   }
   console.log('turbocommit disabled.')
   console.log(`  Removed: ${result.path}`)
+}
+
+function cmdDoctor () {
+  const STATUS = { ok: '  ok', warn: 'warn', error: ' err', info: 'info' }
+  const result = doctor()
+  for (const check of result.checks) {
+    console.log(`[${STATUS[check.status] || check.status}] ${check.name}: ${check.message}`)
+  }
+  if (!result.ok) {
+    process.exitCode = 1
+  }
 }
 
 function cmdRun () {
