@@ -1,6 +1,6 @@
 {
   "name": "turbocommit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Auto-commit after every Claude Code turn",
   "bin": {
     "turbocommit": "./cli.js"
