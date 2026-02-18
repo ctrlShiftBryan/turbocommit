@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Launch Claude Code with turbocommit resolving to the local repo's cli.js.
+#
+# Usage:
+#   ./script/agent                    # interactive
+#   ./script/agent -p "fix the bug"   # with prompt
+set -e
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export PATH="$REPO_ROOT/bin:$PATH"
+exec claude --dangerously-skip-permissions "$@"

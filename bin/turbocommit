@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Local development shim — resolves to the repo's cli.js
+exec node "$(dirname "$0")/../cli.js" "$@"
