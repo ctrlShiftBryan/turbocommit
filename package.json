@@ -1,0 +1,20 @@
+{
+  "name": "turbocommit",
+  "version": "0.1.0",
+  "description": "Auto-commit after every Claude Code turn",
+  "bin": {
+    "turbocommit": "./cli.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "lint": "npx standard --fix"
+  },
+  "devDependencies": {
+    "standard": "^17.1.0"
+  },
+  "license": "MIT",
+  "private": true
+}
