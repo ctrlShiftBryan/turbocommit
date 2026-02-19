@@ -61,6 +61,51 @@ function withCwd (dir, fn) {
 }
 
 describe('run', () => {
+  it('does nothing when TURBOCOMMIT_DISABLED is set', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    const transcript = makeTranscript([{ prompt: 'Hello', response: 'Hi' }])
+    process.env.TURBOCOMMIT_DISABLED = '1'
+    try {
+      withCwd(dir, () => {
+        run(JSON.stringify({ transcript_path: transcript }))
+      })
+      assert.equal(commitCount(dir), 1) // only the initial commit
+    } finally {
+      delete process.env.TURBOCOMMIT_DISABLED
+    }
+  })
+
+  it('disables when TURBOCOMMIT_DISABLED is "0" (truthy string)', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    const transcript = makeTranscript([{ prompt: 'Hello', response: 'Hi' }])
+    process.env.TURBOCOMMIT_DISABLED = '0'
+    try {
+      withCwd(dir, () => {
+        run(JSON.stringify({ transcript_path: transcript }))
+      })
+      assert.equal(commitCount(dir), 1)
+    } finally {
+      delete process.env.TURBOCOMMIT_DISABLED
+    }
+  })
+
+  it('runs normally when TURBOCOMMIT_DISABLED is empty string', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    const transcript = makeTranscript([{ prompt: 'Hello', response: 'Hi' }])
+    process.env.TURBOCOMMIT_DISABLED = ''
+    try {
+      withCwd(dir, () => {
+        run(JSON.stringify({ transcript_path: transcript }))
+      })
+      assert.equal(commitCount(dir), 2) // initial + new commit
+    } finally {
+      delete process.env.TURBOCOMMIT_DISABLED
+    }
+  })
+
   it('does nothing without config', () => {
     const dir = makeRepo()
     withCwd(dir, () => {
@@ -137,9 +182,13 @@ describe('run', () => {
     assert.equal(commitCount(dir), 2)
     assert.equal(lastSubject(dir), 'Turn 3 with changes')
     const body = lastBody(dir)
+    assert.ok(body.includes('## Planning'))
+    assert.ok(body.includes('## Implementation'))
     assert.ok(body.includes('Turn 1'))
     assert.ok(body.includes('Turn 2'))
     assert.ok(body.includes('Turn 3'))
+    // Planning section comes before Implementation
+    assert.ok(body.indexOf('## Planning') < body.indexOf('## Implementation'))
   })
 
   it('squashes contiguous 🫥 commits on consecutive empty turns', () => {
@@ -164,6 +213,8 @@ describe('run', () => {
     assert.ok(body.includes('Turn 1'))
     assert.ok(body.includes('Turn 2'))
     assert.ok(body.includes('Turn 3'))
+    assert.ok(!body.includes('## Planning'), 'no-changes squash must not use Planning/Implementation headers')
+    assert.ok(!body.includes('## Implementation'), 'no-changes squash must not use Planning/Implementation headers')
   })
 
   it('handles invalid JSON input gracefully', () => {
