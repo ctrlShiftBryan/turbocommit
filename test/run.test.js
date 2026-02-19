@@ -125,7 +125,7 @@ describe('run', () => {
       const t2 = makeTranscript([{ prompt: 'Turn 2', response: 'Still thinking...' }])
       run(JSON.stringify({ transcript_path: t2 }))
 
-      assert.equal(commitCount(dir), 3) // Initial + 2 empty
+      assert.equal(commitCount(dir), 2) // Initial + 1 combined empty
 
       // Now make real changes
       fs.writeFileSync(path.join(dir, 'result.txt'), 'done')
@@ -136,6 +136,30 @@ describe('run', () => {
     // Should have squashed: Initial + 1 combined commit
     assert.equal(commitCount(dir), 2)
     assert.equal(lastSubject(dir), 'Turn 3 with changes')
+    const body = lastBody(dir)
+    assert.ok(body.includes('Turn 1'))
+    assert.ok(body.includes('Turn 2'))
+    assert.ok(body.includes('Turn 3'))
+  })
+
+  it('squashes contiguous 🫥 commits on consecutive empty turns', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+
+    withCwd(dir, () => {
+      const t1 = makeTranscript([{ prompt: 'Turn 1', response: 'Thinking...' }])
+      run(JSON.stringify({ transcript_path: t1 }))
+      assert.equal(commitCount(dir), 2) // Initial + 1 empty
+
+      const t2 = makeTranscript([{ prompt: 'Turn 2', response: 'Still thinking...' }])
+      run(JSON.stringify({ transcript_path: t2 }))
+      assert.equal(commitCount(dir), 2) // Squashed into 1 empty
+
+      const t3 = makeTranscript([{ prompt: 'Turn 3', response: 'More thinking...' }])
+      run(JSON.stringify({ transcript_path: t3 }))
+      assert.equal(commitCount(dir), 2) // Still squashed
+    })
+
     const body = lastBody(dir)
     assert.ok(body.includes('Turn 1'))
     assert.ok(body.includes('Turn 2'))
