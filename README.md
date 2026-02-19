@@ -1,3 +1,5 @@
+[![Certified Shovelware](https://justin.searls.co/img/shovelware.svg)](https://justin.searls.co/shovelware/)
+
 # turbocommit
 
 Auto-commit after every Claude Code turn.
