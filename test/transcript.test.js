@@ -45,22 +45,41 @@ describe('parseTranscript', () => {
     assert.equal(pairs[1].prompt, 'Second prompt')
   })
 
-  it('concatenates multiple text blocks in assistant response', () => {
+  it('skips assistant entries that contain tool_use blocks', () => {
     const file = tmpJsonl([
       { type: 'user', message: { content: 'Go' } },
       {
         type: 'assistant',
         message: {
           content: [
-            { type: 'text', text: 'Part 1' },
+            { type: 'text', text: 'Internal narration' },
             { type: 'tool_use', name: 'Read' },
-            { type: 'text', text: 'Part 2' }
+            { type: 'text', text: 'More narration' }
+          ]
+        }
+      },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Final response.' }] } }
+    ])
+    const pairs = parseTranscript(file)
+    assert.equal(pairs[0].response, 'Final response.')
+  })
+
+  it('returns empty response when all assistant entries have tool_use', () => {
+    const file = tmpJsonl([
+      { type: 'user', message: { content: 'Go' } },
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'Narration before tool' },
+            { type: 'tool_use', name: 'Edit' }
           ]
         }
       }
     ])
     const pairs = parseTranscript(file)
-    assert.equal(pairs[0].response, 'Part 1Part 2')
+    assert.equal(pairs.length, 1)
+    assert.equal(pairs[0].response, '')
   })
 
   it('concatenates multiple assistant entries', () => {

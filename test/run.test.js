@@ -1,4 +1,4 @@
-const { describe, it } = require('node:test')
+const { describe, it, before, after, beforeEach } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
@@ -61,6 +61,17 @@ function withCwd (dir, fn) {
 }
 
 describe('run', () => {
+  let realHome
+  before(() => {
+    realHome = process.env.HOME
+  })
+  // Each test gets a fresh HOME so global config never leaks between tests
+  beforeEach(() => {
+    process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-home-'))
+  })
+  after(() => {
+    process.env.HOME = realHome
+  })
   it('does nothing when TURBOCOMMIT_DISABLED is set', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
@@ -235,5 +246,198 @@ describe('run', () => {
     })
     assert.equal(commitCount(dir), 1)
     assert.equal(lastSubject(dir), 'Init project')
+  })
+
+  it('uses transcript headline when title.type is absent', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    const transcript = makeTranscript([{ prompt: 'Add feature X', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    assert.equal(lastSubject(dir), 'Add feature X')
+  })
+
+  it('uses transcript headline when title.type is "transcript"', () => {
+    const dir = makeRepo()
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true,
+      title: { type: 'transcript' }
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    const transcript = makeTranscript([{ prompt: 'Transcript headline', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    assert.equal(lastSubject(dir), 'Transcript headline')
+  })
+
+  it('uses agent output for headline when title.type is "agent"', () => {
+    const dir = makeRepo()
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true,
+      title: { type: 'agent', command: 'echo "Agent headline"' }
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    const transcript = makeTranscript([{ prompt: 'Original prompt', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    assert.equal(lastSubject(dir), 'Agent headline')
+  })
+
+  it('uses agent output for body when body.type is "agent"', () => {
+    const dir = makeRepo()
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true,
+      body: { type: 'agent', command: 'echo "Agent body text"' }
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    const transcript = makeTranscript([{ prompt: 'Add file', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    assert.equal(lastBody(dir), 'Agent body text')
+  })
+
+  it('falls back to transcript when agent fails', () => {
+    const dir = makeRepo()
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true,
+      title: { type: 'agent', command: 'exit 1' },
+      body: { type: 'agent', command: 'exit 1' }
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    const transcript = makeTranscript([{ prompt: 'Fallback headline', response: 'Fallback response.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    // Falls back to transcript-based headline
+    assert.equal(lastSubject(dir), 'Fallback headline')
+    // Falls back to transcript-based body
+    assert.ok(lastBody(dir).includes('Prompt:'))
+    assert.ok(lastBody(dir).includes('Fallback headline'))
+  })
+
+  it('merges global and project config', () => {
+    const dir = makeRepo()
+
+    // Set up global config with title agent (HOME is already isolated)
+    const globalDir = path.join(process.env.HOME, '.claude')
+    fs.mkdirSync(globalDir, { recursive: true })
+    fs.writeFileSync(path.join(globalDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true,
+      title: { type: 'agent', command: 'echo "Global title"' }
+    }))
+
+    // Project config overrides just the command
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      title: { command: 'echo "Project title"' }
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    const transcript = makeTranscript([{ prompt: 'Ignored', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    // Project command wins, but type from global is preserved via merge
+    assert.equal(lastSubject(dir), 'Project title')
+  })
+
+  it('commits when only global config has enabled: true', () => {
+    const dir = makeRepo()
+
+    // Global config enables turbocommit (HOME is isolated)
+    const globalDir = path.join(process.env.HOME, '.claude')
+    fs.mkdirSync(globalDir, { recursive: true })
+    fs.writeFileSync(path.join(globalDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true
+    }))
+
+    // No project config at all
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    const transcript = makeTranscript([{ prompt: 'Global only', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    assert.equal(commitCount(dir), 2)
+    assert.equal(lastSubject(dir), 'Global only')
+  })
+
+  it('project enabled: false overrides global enabled: true', () => {
+    const dir = makeRepo()
+
+    // Global config enables turbocommit
+    const globalDir = path.join(process.env.HOME, '.claude')
+    fs.mkdirSync(globalDir, { recursive: true })
+    fs.writeFileSync(path.join(globalDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true
+    }))
+
+    // Project config explicitly disables
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: false
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    const transcript = makeTranscript([{ prompt: 'Should not commit', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    // Should still be just the initial commit — project disabled wins
+    assert.equal(commitCount(dir), 1)
+  })
+
+  it('preserves $$ in transcript through agent pipeline', () => {
+    const dir = makeRepo()
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true,
+      body: { type: 'agent', command: 'cat', prompt: '{{transcript}}' }
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    const transcript = makeTranscript([{ prompt: 'I used $$ for regex', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    // The $$ must survive through renderPrompt without being collapsed to $
+    const body = lastBody(dir)
+    assert.ok(body.includes('$$'), `expected $$ in body but got: ${body}`)
   })
 })

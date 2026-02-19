@@ -1,4 +1,4 @@
-const { describe, it } = require('node:test')
+const { describe, it, before, after, beforeEach } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
@@ -27,10 +27,27 @@ function writeLocalConfig (dir, config) {
   fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify(config, null, 2))
 }
 
+function writeGlobalConfig (config) {
+  const globalDir = path.join(process.env.HOME, '.claude')
+  fs.mkdirSync(globalDir, { recursive: true })
+  fs.writeFileSync(path.join(globalDir, 'turbocommit.json'), JSON.stringify(config, null, 2))
+}
+
 describe('doctor', () => {
+  let realHome
+  before(() => {
+    realHome = process.env.HOME
+  })
+  beforeEach(() => {
+    process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-home-'))
+  })
+  after(() => {
+    process.env.HOME = realHome
+  })
   it('all ok when hook is installed and last, local config enabled', () => {
     const repo = makeRepo()
     writeLocalConfig(repo, { enabled: true })
+    writeGlobalConfig({ enabled: true })
     const settings = tmpSettings({
       hooks: {
         Stop: [{
@@ -146,7 +163,7 @@ describe('doctor', () => {
     assert.equal(groupCheck, undefined)
   })
 
-  it('warns when local config missing', () => {
+  it('warns when local config missing and no global config', () => {
     const repo = makeRepo()
     const settings = tmpSettings({
       hooks: {
@@ -160,9 +177,52 @@ describe('doctor', () => {
     assert.ok(localCheck.message.includes('Not found'))
   })
 
-  it('warns when enabled is false', () => {
+  it('shows info for missing local config when global config exists', () => {
+    const repo = makeRepo()
+    writeGlobalConfig({ enabled: true })
+    const settings = tmpSettings({
+      hooks: {
+        Stop: [{ hooks: [{ type: 'command', command: 'turbocommit run' }] }]
+      }
+    })
+
+    const result = doctor(settings, repo)
+    const localCheck = result.checks.find(c => c.name === 'Local config')
+    assert.equal(localCheck.status, 'info')
+    assert.ok(localCheck.message.includes('using global config'))
+  })
+
+  it('reports enabled from global-only config', () => {
+    const repo = makeRepo()
+    writeGlobalConfig({ enabled: true })
+    const settings = tmpSettings({
+      hooks: {
+        Stop: [{ hooks: [{ type: 'command', command: 'turbocommit run' }] }]
+      }
+    })
+
+    const result = doctor(settings, repo)
+    const enabledCheck = result.checks.find(c => c.name === 'Enabled')
+    assert.equal(enabledCheck.status, 'ok')
+    assert.equal(enabledCheck.message, 'Enabled')
+  })
+
+  it('warns when enabled is false in merged config', () => {
     const repo = makeRepo()
     writeLocalConfig(repo, { enabled: false })
+    const settings = tmpSettings({
+      hooks: {
+        Stop: [{ hooks: [{ type: 'command', command: 'turbocommit run' }] }]
+      }
+    })
+
+    const result = doctor(settings, repo)
+    const enabledCheck = result.checks.find(c => c.name === 'Enabled')
+    assert.equal(enabledCheck.status, 'warn')
+  })
+
+  it('warns when neither global nor local sets enabled', () => {
+    const repo = makeRepo()
     const settings = tmpSettings({
       hooks: {
         Stop: [{ hooks: [{ type: 'command', command: 'turbocommit run' }] }]
