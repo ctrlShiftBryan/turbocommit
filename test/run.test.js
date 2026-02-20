@@ -4,7 +4,7 @@ const fs = require('fs')
 const path = require('path')
 const os = require('os')
 const { execSync } = require('child_process')
-const { run } = require('../lib/run')
+const { run, formatModelName, resolveCoauthor } = require('../lib/run')
 
 function makeRepo () {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-run-'))
@@ -22,17 +22,16 @@ function enableAndCommit (dir) {
   execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
 }
 
-function makeTranscript (pairs) {
+function makeTranscript (pairs, { model } = {}) {
   // Write transcript outside the repo to avoid untracked-file noise
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-transcript-'))
   const file = path.join(dir, 'transcript.jsonl')
   const lines = []
   for (const { prompt, response } of pairs) {
     lines.push(JSON.stringify({ type: 'user', message: { content: prompt } }))
-    lines.push(JSON.stringify({
-      type: 'assistant',
-      message: { content: [{ type: 'text', text: response }] }
-    }))
+    const msg = { content: [{ type: 'text', text: response }] }
+    if (model) msg.model = model
+    lines.push(JSON.stringify({ type: 'assistant', message: msg }))
   }
   fs.writeFileSync(file, lines.join('\n') + '\n')
   return file
@@ -439,5 +438,242 @@ describe('run', () => {
     // The $$ must survive through renderPrompt without being collapsed to $
     const body = lastBody(dir)
     assert.ok(body.includes('$$'), `expected $$ in body but got: ${body}`)
+  })
+
+  it('appends coauthor trailer when CLAUDECODE set and model present', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    const transcript = makeTranscript(
+      [{ prompt: 'Add file', response: 'Done.' }],
+      { model: 'claude-opus-4-6' }
+    )
+    const oldClaudeCode = process.env.CLAUDECODE
+    process.env.CLAUDECODE = '1'
+    try {
+      withCwd(dir, () => {
+        run(JSON.stringify({ transcript_path: transcript }))
+      })
+      const body = lastBody(dir)
+      assert.ok(body.includes('Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>'))
+    } finally {
+      if (oldClaudeCode === undefined) delete process.env.CLAUDECODE
+      else process.env.CLAUDECODE = oldClaudeCode
+    }
+  })
+
+  it('skips coauthor when CLAUDECODE is not set', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    const transcript = makeTranscript(
+      [{ prompt: 'Add file', response: 'Done.' }],
+      { model: 'claude-opus-4-6' }
+    )
+    const oldClaudeCode = process.env.CLAUDECODE
+    delete process.env.CLAUDECODE
+    try {
+      withCwd(dir, () => {
+        run(JSON.stringify({ transcript_path: transcript }))
+      })
+      const body = lastBody(dir)
+      assert.ok(!body.includes('Co-Authored-By'))
+    } finally {
+      if (oldClaudeCode !== undefined) process.env.CLAUDECODE = oldClaudeCode
+    }
+  })
+
+  it('skips coauthor when model is missing from transcript', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    const transcript = makeTranscript([{ prompt: 'Add file', response: 'Done.' }])
+    const oldClaudeCode = process.env.CLAUDECODE
+    process.env.CLAUDECODE = '1'
+    try {
+      withCwd(dir, () => {
+        run(JSON.stringify({ transcript_path: transcript }))
+      })
+      const body = lastBody(dir)
+      assert.ok(!body.includes('Co-Authored-By'))
+    } finally {
+      if (oldClaudeCode === undefined) delete process.env.CLAUDECODE
+      else process.env.CLAUDECODE = oldClaudeCode
+    }
+  })
+
+  it('skips coauthor when config.coauthor is false', () => {
+    const dir = makeRepo()
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true, coauthor: false
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    const transcript = makeTranscript(
+      [{ prompt: 'Add file', response: 'Done.' }],
+      { model: 'claude-opus-4-6' }
+    )
+    const oldClaudeCode = process.env.CLAUDECODE
+    process.env.CLAUDECODE = '1'
+    try {
+      withCwd(dir, () => {
+        run(JSON.stringify({ transcript_path: transcript }))
+      })
+      const body = lastBody(dir)
+      assert.ok(!body.includes('Co-Authored-By'))
+    } finally {
+      if (oldClaudeCode === undefined) delete process.env.CLAUDECODE
+      else process.env.CLAUDECODE = oldClaudeCode
+    }
+  })
+
+  it('uses custom coauthor string from config', () => {
+    const dir = makeRepo()
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true, coauthor: 'My Bot <bot@example.com>'
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    const transcript = makeTranscript([{ prompt: 'Add file', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    const body = lastBody(dir)
+    assert.ok(body.includes('Co-Authored-By: My Bot <bot@example.com>'))
+  })
+
+  it('auto-detects coauthor when config.coauthor is explicit true', () => {
+    const dir = makeRepo()
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true, coauthor: true
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    const transcript = makeTranscript(
+      [{ prompt: 'Add file', response: 'Done.' }],
+      { model: 'claude-sonnet-4-6' }
+    )
+    const oldClaudeCode = process.env.CLAUDECODE
+    process.env.CLAUDECODE = '1'
+    try {
+      withCwd(dir, () => {
+        run(JSON.stringify({ transcript_path: transcript }))
+      })
+      const body = lastBody(dir)
+      assert.ok(body.includes('Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>'))
+    } finally {
+      if (oldClaudeCode === undefined) delete process.env.CLAUDECODE
+      else process.env.CLAUDECODE = oldClaudeCode
+    }
+  })
+
+  it('appends coauthor after squashed Planning/Implementation body', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    const oldClaudeCode = process.env.CLAUDECODE
+    process.env.CLAUDECODE = '1'
+    try {
+      withCwd(dir, () => {
+        // Empty turn → 🫥 commit
+        const t1 = makeTranscript(
+          [{ prompt: 'Turn 1', response: 'Thinking...' }],
+          { model: 'claude-opus-4-6' }
+        )
+        run(JSON.stringify({ transcript_path: t1 }))
+
+        // Real changes arrive — squash the 🫥
+        fs.writeFileSync(path.join(dir, 'result.txt'), 'done')
+        const t2 = makeTranscript(
+          [{ prompt: 'Turn 2 with changes', response: 'Created file.' }],
+          { model: 'claude-opus-4-6' }
+        )
+        run(JSON.stringify({ transcript_path: t2 }))
+      })
+
+      const body = lastBody(dir)
+      assert.ok(body.includes('## Planning'))
+      assert.ok(body.includes('## Implementation'))
+      assert.ok(body.includes('Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>'))
+      // Trailer must be after all content
+      const coauthorIdx = body.indexOf('Co-Authored-By:')
+      const implIdx = body.indexOf('## Implementation')
+      assert.ok(coauthorIdx > implIdx, 'coauthor trailer should come after Implementation section')
+    } finally {
+      if (oldClaudeCode === undefined) delete process.env.CLAUDECODE
+      else process.env.CLAUDECODE = oldClaudeCode
+    }
+  })
+})
+
+describe('formatModelName', () => {
+  it('formats claude-opus-4-6', () => {
+    assert.equal(formatModelName('claude-opus-4-6'), 'Claude Opus 4.6')
+  })
+
+  it('formats claude-sonnet-4-6', () => {
+    assert.equal(formatModelName('claude-sonnet-4-6'), 'Claude Sonnet 4.6')
+  })
+
+  it('formats claude-haiku-4-5-20251001 (strips date)', () => {
+    assert.equal(formatModelName('claude-haiku-4-5-20251001'), 'Claude Haiku 4.5')
+  })
+
+  it('formats old-style claude-3-5-sonnet-20241022', () => {
+    assert.equal(formatModelName('claude-3-5-sonnet-20241022'), 'Claude Sonnet 3.5')
+  })
+
+  it('formats old-style claude-3-opus-20240229', () => {
+    assert.equal(formatModelName('claude-3-opus-20240229'), 'Claude Opus 3')
+  })
+
+  it('formats old-style claude-3-5-haiku-20241022', () => {
+    assert.equal(formatModelName('claude-3-5-haiku-20241022'), 'Claude Haiku 3.5')
+  })
+
+  it('returns raw ID for non-claude models', () => {
+    assert.equal(formatModelName('gpt-4'), 'gpt-4')
+  })
+
+  it('returns null for null input', () => {
+    assert.equal(formatModelName(null), null)
+  })
+
+  it('returns null for undefined input', () => {
+    assert.equal(formatModelName(undefined), null)
+  })
+})
+
+describe('resolveCoauthor', () => {
+  it('returns null when coauthor is false', () => {
+    assert.equal(resolveCoauthor({ coauthor: false }, '/some/path'), null)
+  })
+
+  it('wraps custom string in Co-Authored-By header', () => {
+    assert.equal(
+      resolveCoauthor({ coauthor: 'Bot <b@x.com>' }, '/any'),
+      'Co-Authored-By: Bot <b@x.com>'
+    )
+  })
+
+  it('returns null when CLAUDECODE is not set (auto-detect)', () => {
+    const old = process.env.CLAUDECODE
+    delete process.env.CLAUDECODE
+    try {
+      assert.equal(resolveCoauthor({}, '/some/path'), null)
+    } finally {
+      if (old !== undefined) process.env.CLAUDECODE = old
+    }
   })
 })

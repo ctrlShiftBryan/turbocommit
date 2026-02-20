@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
 const os = require('os')
-const { parseTranscript, formatBody, extractHeadline, fallbackHeadline } = require('../lib/transcript')
+const { parseTranscript, formatBody, extractHeadline, fallbackHeadline, extractModel } = require('../lib/transcript')
 
 function tmpJsonl (lines) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-transcript-'))
@@ -170,5 +170,47 @@ describe('extractHeadline', () => {
 describe('fallbackHeadline', () => {
   it('matches expected format', () => {
     assert.match(fallbackHeadline(), /^auto-commit \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
+  })
+})
+
+describe('extractModel', () => {
+  it('returns null for missing file', () => {
+    assert.equal(extractModel('/nonexistent'), null)
+  })
+
+  it('returns null for null path', () => {
+    assert.equal(extractModel(null), null)
+  })
+
+  it('extracts model from first assistant entry', () => {
+    const file = tmpJsonl([
+      { type: 'user', message: { content: 'Hello' } },
+      { type: 'assistant', message: { model: 'claude-opus-4-6', content: [{ type: 'text', text: 'Hi' }] } }
+    ])
+    assert.equal(extractModel(file), 'claude-opus-4-6')
+  })
+
+  it('skips entries without model field', () => {
+    const file = tmpJsonl([
+      { type: 'user', message: { content: 'Hello' } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Hi' }] } },
+      { type: 'assistant', message: { model: 'claude-sonnet-4-6', content: [{ type: 'text', text: 'Bye' }] } }
+    ])
+    assert.equal(extractModel(file), 'claude-sonnet-4-6')
+  })
+
+  it('returns null when no assistant entries have model', () => {
+    const file = tmpJsonl([
+      { type: 'user', message: { content: 'Hello' } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Hi' }] } }
+    ])
+    assert.equal(extractModel(file), null)
+  })
+
+  it('returns null for empty file', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-transcript-'))
+    const file = path.join(dir, 'transcript.jsonl')
+    fs.writeFileSync(file, '')
+    assert.equal(extractModel(file), null)
   })
 })
