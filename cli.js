@@ -19,7 +19,7 @@ Commands:
   doctor      Check hook and config health
   run         Hook entry point (reads stdin, auto-commits)
   help        Show this help text
-  --version   Show version
+  --version, -v  Show version
 
 Usage:
   turbocommit install     # set up the global hook
@@ -45,6 +45,7 @@ function main (argv) {
     case 'run':
       return cmdRun()
     case '--version':
+    case '-v':
     case 'version':
       console.log(VERSION)
       return

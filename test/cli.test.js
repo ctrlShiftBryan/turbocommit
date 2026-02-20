@@ -47,6 +47,12 @@ describe('cli', () => {
     assert.equal(result.stdout, pkg.version)
   })
 
+  it('shows version with -v', () => {
+    const result = cli('-v')
+    const pkg = require('../package.json')
+    assert.equal(result.stdout, pkg.version)
+  })
+
   it('reports unknown command', () => {
     const result = cli('bogus')
     assert.equal(result.exitCode, 1)
