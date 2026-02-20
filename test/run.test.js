@@ -17,7 +17,10 @@ function makeRepo () {
 function enableAndCommit (dir) {
   const claudeDir = path.join(dir, '.claude')
   fs.mkdirSync(claudeDir, { recursive: true })
-  fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({ enabled: true }))
+  fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+    enabled: true,
+    title: { type: 'transcript' }
+  }))
   fs.writeFileSync(path.join(dir, 'README.md'), 'init')
   execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
 }
@@ -236,7 +239,10 @@ describe('run', () => {
     // Enable turbocommit without committing (empty repo)
     const claudeDir = path.join(dir, '.claude')
     fs.mkdirSync(claudeDir, { recursive: true })
-    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({ enabled: true }))
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true,
+      title: { type: 'transcript' }
+    }))
     fs.writeFileSync(path.join(dir, 'file.txt'), 'first file')
 
     const transcript = makeTranscript([{ prompt: 'Init project', response: 'Done.' }])
@@ -247,15 +253,23 @@ describe('run', () => {
     assert.equal(lastSubject(dir), 'Init project')
   })
 
-  it('uses transcript headline when title.type is absent', () => {
+  it('uses agent for headline by default when title.type is absent', () => {
     const dir = makeRepo()
-    enableAndCommit(dir)
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true,
+      title: { command: 'echo "Agent default headline"' }
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
-    const transcript = makeTranscript([{ prompt: 'Add feature X', response: 'Done.' }])
+    const transcript = makeTranscript([{ prompt: 'Original prompt', response: 'Done.' }])
     withCwd(dir, () => {
       run(JSON.stringify({ transcript_path: transcript }))
     })
-    assert.equal(lastSubject(dir), 'Add feature X')
+    assert.equal(lastSubject(dir), 'Agent default headline')
   })
 
   it('uses transcript headline when title.type is "transcript"', () => {
@@ -302,6 +316,7 @@ describe('run', () => {
     fs.mkdirSync(claudeDir, { recursive: true })
     fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
       enabled: true,
+      title: { type: 'transcript' },
       body: { type: 'agent', command: 'echo "Agent body text"' }
     }))
     fs.writeFileSync(path.join(dir, 'README.md'), 'init')
@@ -375,7 +390,8 @@ describe('run', () => {
     const globalDir = path.join(process.env.HOME, '.claude')
     fs.mkdirSync(globalDir, { recursive: true })
     fs.writeFileSync(path.join(globalDir, 'turbocommit.json'), JSON.stringify({
-      enabled: true
+      enabled: true,
+      title: { type: 'transcript' }
     }))
 
     // No project config at all
@@ -425,6 +441,7 @@ describe('run', () => {
     fs.mkdirSync(claudeDir, { recursive: true })
     fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
       enabled: true,
+      title: { type: 'transcript' },
       body: { type: 'agent', command: 'cat', prompt: '{{transcript}}' }
     }))
     fs.writeFileSync(path.join(dir, 'README.md'), 'init')
@@ -507,7 +524,7 @@ describe('run', () => {
     const claudeDir = path.join(dir, '.claude')
     fs.mkdirSync(claudeDir, { recursive: true })
     fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
-      enabled: true, coauthor: false
+      enabled: true, title: { type: 'transcript' }, coauthor: false
     }))
     fs.writeFileSync(path.join(dir, 'README.md'), 'init')
     execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
@@ -536,7 +553,7 @@ describe('run', () => {
     const claudeDir = path.join(dir, '.claude')
     fs.mkdirSync(claudeDir, { recursive: true })
     fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
-      enabled: true, coauthor: 'My Bot <bot@example.com>'
+      enabled: true, title: { type: 'transcript' }, coauthor: 'My Bot <bot@example.com>'
     }))
     fs.writeFileSync(path.join(dir, 'README.md'), 'init')
     execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
@@ -555,7 +572,7 @@ describe('run', () => {
     const claudeDir = path.join(dir, '.claude')
     fs.mkdirSync(claudeDir, { recursive: true })
     fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
-      enabled: true, coauthor: true
+      enabled: true, title: { type: 'transcript' }, coauthor: true
     }))
     fs.writeFileSync(path.join(dir, 'README.md'), 'init')
     execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
