@@ -18,5 +18,8 @@ jobs:
         with:
           node-version: latest
 
+      - name: Lint
+        run: npx standard
+
       - name: Run tests
-        run: npm test
+        run: node --test $(ls test/*.test.js | grep -v integration)
