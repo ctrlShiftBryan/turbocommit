@@ -6,7 +6,7 @@ const os = require('os')
 const { execSync } = require('child_process')
 const {
   gitRoot, hasChanges, countEmptyMarkers, collectBodies,
-  commitEmpty, addAndCommit, softReset, hasCommits
+  commitEmpty, addAndCommit, softReset, hasCommits, currentBranch
 } = require('../lib/git')
 
 function makeRepo () {
@@ -136,5 +136,26 @@ describe('softReset', () => {
     softReset(dir, 1)
     const countAfter = execSync('git rev-list --count HEAD', { cwd: dir, encoding: 'utf8' }).trim()
     assert.equal(Number(countBefore) - Number(countAfter), 1)
+  })
+})
+
+describe('currentBranch', () => {
+  it('returns branch name for a repo on a branch', () => {
+    const dir = makeRepoWithCommit()
+    const branch = currentBranch(dir)
+    // Default branch is typically main or master
+    assert.ok(branch === 'main' || branch === 'master', `expected main or master, got ${branch}`)
+  })
+
+  it('returns HEAD for detached HEAD', () => {
+    const dir = makeRepoWithCommit()
+    const sha = execSync('git rev-parse HEAD', { cwd: dir, encoding: 'utf8' }).trim()
+    execSync(`git checkout ${sha}`, { cwd: dir, stdio: 'pipe', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })
+    assert.equal(currentBranch(dir), 'HEAD')
+  })
+
+  it('returns HEAD for non-repo directory', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-nogit-'))
+    assert.equal(currentBranch(dir), 'HEAD')
   })
 })

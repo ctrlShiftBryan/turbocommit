@@ -597,6 +597,108 @@ describe('run', () => {
   })
 })
 
+describe('run monitor events', () => {
+  let realHome
+  const { logPath } = require('../lib/log')
+  const readLog = () => {
+    try {
+      return fs.readFileSync(logPath(), 'utf8').trim().split('\n').map(l => JSON.parse(l))
+    } catch {
+      return []
+    }
+  }
+
+  before(() => { realHome = process.env.HOME })
+  beforeEach(() => {
+    process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-home-'))
+  })
+  after(() => {
+    process.env.HOME = realHome
+  })
+
+  it('logs start and success events on successful commit', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    const transcript = makeTranscript([{ prompt: 'Add a file', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    const entries = readLog()
+    assert.equal(entries.length, 2)
+    assert.equal(entries[0].event, 'start')
+    assert.equal(entries[1].event, 'success')
+    assert.ok(entries[0].project)
+    assert.ok(entries[0].branch)
+    assert.equal(typeof entries[0].context, 'number')
+    assert.ok(entries[1].title)
+  })
+
+  it('logs start and success for empty commits', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    const transcript = makeTranscript([{ prompt: 'Hello', response: 'Hi' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    const entries = readLog()
+    assert.equal(entries.length, 2)
+    assert.equal(entries[0].event, 'start')
+    assert.equal(entries[1].event, 'success')
+  })
+
+  it('does not log events when config disabled', () => {
+    const dir = makeRepo()
+    // No config → disabled
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: '' }))
+    })
+    const entries = readLog()
+    assert.equal(entries.length, 0)
+  })
+
+  it('logs start and fail when commit logic throws', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    // Create a git index lock to make git add fail
+    fs.writeFileSync(path.join(dir, '.git', 'index.lock'), '')
+    const transcript = makeTranscript([{ prompt: 'Will fail', response: 'Boom.' }])
+    try {
+      withCwd(dir, () => {
+        run(JSON.stringify({ transcript_path: transcript }))
+      })
+    } catch {
+      // Expected — commit fails
+    } finally {
+      fs.unlinkSync(path.join(dir, '.git', 'index.lock'))
+    }
+    const entries = readLog()
+    assert.ok(entries.length >= 2, `expected at least 2 entries, got ${entries.length}`)
+    assert.equal(entries[0].event, 'start')
+    assert.equal(entries[entries.length - 1].event, 'fail')
+  })
+
+  it('commits even when logEvent fails', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    // Make log dir read-only so logEvent can't write
+    const tcDir = path.join(process.env.HOME, '.claude', 'turbocommit')
+    fs.mkdirSync(tcDir, { recursive: true })
+    fs.chmodSync(tcDir, 0o444)
+    const transcript = makeTranscript([{ prompt: 'Still commits', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    // Restore permissions for cleanup
+    fs.chmodSync(tcDir, 0o755)
+    // Commit should have succeeded despite log failure
+    assert.equal(commitCount(dir), 2)
+    assert.equal(lastSubject(dir), 'Still commits')
+  })
+})
+
 describe('formatModelName', () => {
   it('formats claude-opus-4-6', () => {
     assert.equal(formatModelName('claude-opus-4-6'), 'Claude Opus 4.6')

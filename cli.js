@@ -5,6 +5,7 @@ const { install, uninstall } = require('./lib/install')
 const { init, deinit } = require('./lib/init')
 const { run } = require('./lib/run')
 const { doctor } = require('./lib/doctor')
+const { monitor } = require('./lib/monitor')
 
 const VERSION = require('./package.json').version
 
@@ -17,6 +18,7 @@ Commands:
   init        Create .claude/turbocommit.json in current git repo
   deinit      Remove .claude/turbocommit.json
   doctor      Check hook and config health
+  monitor     Tail the event log (start/success/fail)
   run         Hook entry point (reads stdin, auto-commits)
   help        Show this help text
   --version, -v  Show version
@@ -25,6 +27,7 @@ Usage:
   turbocommit install     # set up the global hook
   turbocommit init        # enable in a project
   turbocommit doctor      # verify everything is wired correctly
+  turbocommit monitor     # watch commits in real-time
   turbocommit run         # called by Claude Code (not manually)
 `
 
@@ -38,6 +41,8 @@ function main (argv) {
       return cmdUninstall()
     case 'doctor':
       return cmdDoctor()
+    case 'monitor':
+      return cmdMonitor()
     case 'init':
       return cmdInit()
     case 'deinit':
@@ -131,6 +136,10 @@ function cmdDoctor () {
   if (!result.ok) {
     process.exitCode = 1
   }
+}
+
+function cmdMonitor () {
+  monitor()
 }
 
 function cmdRun () {
