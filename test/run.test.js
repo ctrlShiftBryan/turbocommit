@@ -262,6 +262,35 @@ describe('run', () => {
     assert.equal(lastSubject(dir), 'Agent default headline')
   })
 
+  it('passes truncated transcript to title agent for large sessions', () => {
+    const dir = makeRepo()
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    // Use `wc -c` to echo the byte count of stdin — proves what the agent receives
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true,
+      title: { command: 'wc -c' }
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
+    // 20 pairs with large responses — well over 20K chars total
+    const pairs = Array.from({ length: 20 }, (_, i) => ({
+      prompt: `Turn ${i}`,
+      response: 'x'.repeat(3000)
+    }))
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    const transcript = makeTranscript(pairs)
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    // The headline is the byte count wc -c returned. If truncation works,
+    // it should be much smaller than the full transcript (~60K+ chars).
+    const byteCount = Number(lastSubject(dir).trim())
+    assert.ok(byteCount < 20000, `expected truncated input (<20K) but agent received ${byteCount} bytes`)
+    assert.ok(byteCount > 100, `expected some content but agent received only ${byteCount} bytes`)
+  })
+
   it('uses transcript headline when title.type is "transcript"', () => {
     const dir = makeRepo()
     const claudeDir = path.join(dir, '.claude')

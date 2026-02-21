@@ -79,7 +79,7 @@ describe('runAgent', () => {
   })
 
   it('returns null when command times out', () => {
-    // runAgent hardcodes 30s timeout; we can't wait that long in tests.
+    // runAgent hardcodes 45s timeout; we can't wait that long in tests.
     // Instead, verify the tryRun timeout plumbing works end-to-end.
     const { tryRun } = require('../lib/io')
     const r = tryRun('sleep 10', { timeout: 100 })

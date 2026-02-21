@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
 const os = require('os')
-const { parseTranscript, formatBody, extractHeadline, fallbackHeadline, extractModel } = require('../lib/transcript')
+const { parseTranscript, formatBody, formatTitleTranscript, extractHeadline, fallbackHeadline, extractModel } = require('../lib/transcript')
 
 function tmpJsonl (lines) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-transcript-'))
@@ -143,6 +143,93 @@ describe('formatBody', () => {
     assert.ok(result.includes('---'))
     assert.ok(result.includes('Prompt:\nA'))
     assert.ok(result.includes('Prompt:\nC'))
+  })
+})
+
+describe('formatTitleTranscript', () => {
+  it('returns full transcript when under budget', () => {
+    const pairs = [
+      { prompt: 'Fix bug', response: 'Done.' },
+      { prompt: 'Add tests', response: 'Added.' }
+    ]
+    assert.equal(formatTitleTranscript(pairs), formatBody(pairs))
+  })
+
+  it('returns "(no transcript)" for empty pairs', () => {
+    assert.equal(formatTitleTranscript([]), '(no transcript)')
+  })
+
+  it('samples first, middle, and last pairs when over budget', () => {
+    const pairs = Array.from({ length: 10 }, (_, i) => ({
+      prompt: `Prompt ${i}`,
+      response: 'x'.repeat(3000)
+    }))
+    const result = formatTitleTranscript(pairs, 500)
+    assert.ok(result.includes('Prompt 0'), 'includes first pair')
+    assert.ok(result.includes('Prompt 5'), 'includes middle pair')
+    assert.ok(result.includes('Prompt 9'), 'includes last pair')
+    assert.ok(!result.includes('Prompt 3'), 'excludes non-sampled pair')
+  })
+
+  it('includes gap markers for omitted turns', () => {
+    const pairs = Array.from({ length: 10 }, (_, i) => ({
+      prompt: `P${i}`,
+      response: 'x'.repeat(3000)
+    }))
+    const result = formatTitleTranscript(pairs, 500)
+    assert.ok(result.includes('[... 4 turns omitted ...]'))
+    assert.ok(result.includes('[... 3 turns omitted ...]'))
+  })
+
+  it('truncates long prompts to 500 chars', () => {
+    const pairs = [
+      { prompt: 'A'.repeat(1000), response: 'short' },
+      { prompt: 'B'.repeat(1000), response: 'short' }
+    ]
+    const result = formatTitleTranscript(pairs, 100)
+    assert.ok(result.includes('A'.repeat(500) + '...'))
+    assert.ok(!result.includes('A'.repeat(501)))
+  })
+
+  it('truncates long responses to 2000 chars', () => {
+    const pairs = [
+      { prompt: 'short', response: 'R'.repeat(5000) },
+      { prompt: 'short', response: 'S'.repeat(5000) }
+    ]
+    const result = formatTitleTranscript(pairs, 100)
+    assert.ok(result.includes('R'.repeat(2000) + '...'))
+    assert.ok(!result.includes('R'.repeat(2001)))
+  })
+
+  it('handles single pair', () => {
+    const pairs = [{ prompt: 'Only one', response: 'x'.repeat(30000) }]
+    const result = formatTitleTranscript(pairs, 100)
+    assert.ok(result.includes('Only one'))
+    assert.ok(!result.includes('omitted'))
+  })
+
+  it('handles two pairs without duplicate indices', () => {
+    const pairs = [
+      { prompt: 'First', response: 'x'.repeat(15000) },
+      { prompt: 'Second', response: 'x'.repeat(15000) }
+    ]
+    const result = formatTitleTranscript(pairs, 100)
+    assert.ok(result.includes('First'))
+    assert.ok(result.includes('Second'))
+    // Should not have duplicate entries
+    const firstCount = result.split('First').length - 1
+    assert.equal(firstCount, 1, 'first pair should appear exactly once')
+  })
+
+  it('deduplicates when middle equals first or last', () => {
+    // With 2 pairs, floor(2/2) = 1, so indices are [0, 1, 1] → deduplicated to [0, 1]
+    const pairs = [
+      { prompt: 'A', response: 'x'.repeat(15000) },
+      { prompt: 'B', response: 'x'.repeat(15000) }
+    ]
+    const result = formatTitleTranscript(pairs, 100)
+    const bCount = result.split('Prompt:\nB').length - 1
+    assert.equal(bCount, 1, 'last pair should appear exactly once')
   })
 })
 
