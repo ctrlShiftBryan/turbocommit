@@ -91,6 +91,18 @@ describe('integration', { skip: SKIP }, () => {
     assert.ok(after > before, `expected commits after turbocommit, got ${before} -> ${after}`)
   })
 
+  it('turbocommit appends co-authored-by trailer', () => {
+    const { dir } = makeProject()
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'new content')
+
+    runClaude(dir, 'Say hello')
+
+    const after = commitCount(dir)
+    assert.ok(after > 1, `expected turbocommit commit, got ${after} commits`)
+    const body = execSync('git log --format=%b -1', { cwd: dir, encoding: 'utf8' })
+    assert.ok(body.includes('Co-Authored-By:'), `expected Co-Authored-By trailer in commit body, got:\n${body.slice(-200)}`)
+  })
+
   it('turbocommit does not commit when earlier group blocks', () => {
     const { dir } = makeProject()
     const hookLog = path.join(dir, 'hook-fired.txt')

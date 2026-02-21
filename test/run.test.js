@@ -447,7 +447,7 @@ describe('run', () => {
     assert.ok(body.includes('$$'), `expected $$ in body but got: ${body}`)
   })
 
-  it('appends coauthor trailer when CLAUDECODE set and model present', () => {
+  it('appends coauthor trailer when model present in transcript', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
@@ -455,39 +455,11 @@ describe('run', () => {
       [{ prompt: 'Add file', response: 'Done.' }],
       { model: 'claude-opus-4-6' }
     )
-    const oldClaudeCode = process.env.CLAUDECODE
-    process.env.CLAUDECODE = '1'
-    try {
-      withCwd(dir, () => {
-        run(JSON.stringify({ transcript_path: transcript }))
-      })
-      const body = lastBody(dir)
-      assert.ok(body.includes('Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>'))
-    } finally {
-      if (oldClaudeCode === undefined) delete process.env.CLAUDECODE
-      else process.env.CLAUDECODE = oldClaudeCode
-    }
-  })
-
-  it('skips coauthor when CLAUDECODE is not set', () => {
-    const dir = makeRepo()
-    enableAndCommit(dir)
-    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
-    const transcript = makeTranscript(
-      [{ prompt: 'Add file', response: 'Done.' }],
-      { model: 'claude-opus-4-6' }
-    )
-    const oldClaudeCode = process.env.CLAUDECODE
-    delete process.env.CLAUDECODE
-    try {
-      withCwd(dir, () => {
-        run(JSON.stringify({ transcript_path: transcript }))
-      })
-      const body = lastBody(dir)
-      assert.ok(!body.includes('Co-Authored-By'))
-    } finally {
-      if (oldClaudeCode !== undefined) process.env.CLAUDECODE = oldClaudeCode
-    }
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    const body = lastBody(dir)
+    assert.ok(body.includes('Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>'))
   })
 
   it('skips coauthor when model is missing from transcript', () => {
@@ -495,18 +467,11 @@ describe('run', () => {
     enableAndCommit(dir)
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
     const transcript = makeTranscript([{ prompt: 'Add file', response: 'Done.' }])
-    const oldClaudeCode = process.env.CLAUDECODE
-    process.env.CLAUDECODE = '1'
-    try {
-      withCwd(dir, () => {
-        run(JSON.stringify({ transcript_path: transcript }))
-      })
-      const body = lastBody(dir)
-      assert.ok(!body.includes('Co-Authored-By'))
-    } finally {
-      if (oldClaudeCode === undefined) delete process.env.CLAUDECODE
-      else process.env.CLAUDECODE = oldClaudeCode
-    }
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    const body = lastBody(dir)
+    assert.ok(!body.includes('Co-Authored-By'))
   })
 
   it('skips coauthor when config.coauthor is false', () => {
@@ -524,18 +489,11 @@ describe('run', () => {
       [{ prompt: 'Add file', response: 'Done.' }],
       { model: 'claude-opus-4-6' }
     )
-    const oldClaudeCode = process.env.CLAUDECODE
-    process.env.CLAUDECODE = '1'
-    try {
-      withCwd(dir, () => {
-        run(JSON.stringify({ transcript_path: transcript }))
-      })
-      const body = lastBody(dir)
-      assert.ok(!body.includes('Co-Authored-By'))
-    } finally {
-      if (oldClaudeCode === undefined) delete process.env.CLAUDECODE
-      else process.env.CLAUDECODE = oldClaudeCode
-    }
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    const body = lastBody(dir)
+    assert.ok(!body.includes('Co-Authored-By'))
   })
 
   it('uses custom coauthor string from config', () => {
@@ -572,55 +530,41 @@ describe('run', () => {
       [{ prompt: 'Add file', response: 'Done.' }],
       { model: 'claude-sonnet-4-6' }
     )
-    const oldClaudeCode = process.env.CLAUDECODE
-    process.env.CLAUDECODE = '1'
-    try {
-      withCwd(dir, () => {
-        run(JSON.stringify({ transcript_path: transcript }))
-      })
-      const body = lastBody(dir)
-      assert.ok(body.includes('Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>'))
-    } finally {
-      if (oldClaudeCode === undefined) delete process.env.CLAUDECODE
-      else process.env.CLAUDECODE = oldClaudeCode
-    }
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    const body = lastBody(dir)
+    assert.ok(body.includes('Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>'))
   })
 
   it('appends coauthor after squashed Planning/Implementation body', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
-    const oldClaudeCode = process.env.CLAUDECODE
-    process.env.CLAUDECODE = '1'
-    try {
-      withCwd(dir, () => {
-        // Empty turn → 🫥 commit
-        const t1 = makeTranscript(
-          [{ prompt: 'Turn 1', response: 'Thinking...' }],
-          { model: 'claude-opus-4-6' }
-        )
-        run(JSON.stringify({ transcript_path: t1 }))
+    withCwd(dir, () => {
+      // Empty turn → 🫥 commit
+      const t1 = makeTranscript(
+        [{ prompt: 'Turn 1', response: 'Thinking...' }],
+        { model: 'claude-opus-4-6' }
+      )
+      run(JSON.stringify({ transcript_path: t1 }))
 
-        // Real changes arrive — squash the 🫥
-        fs.writeFileSync(path.join(dir, 'result.txt'), 'done')
-        const t2 = makeTranscript(
-          [{ prompt: 'Turn 2 with changes', response: 'Created file.' }],
-          { model: 'claude-opus-4-6' }
-        )
-        run(JSON.stringify({ transcript_path: t2 }))
-      })
+      // Real changes arrive — squash the 🫥
+      fs.writeFileSync(path.join(dir, 'result.txt'), 'done')
+      const t2 = makeTranscript(
+        [{ prompt: 'Turn 2 with changes', response: 'Created file.' }],
+        { model: 'claude-opus-4-6' }
+      )
+      run(JSON.stringify({ transcript_path: t2 }))
+    })
 
-      const body = lastBody(dir)
-      assert.ok(body.includes('## Planning'))
-      assert.ok(body.includes('## Implementation'))
-      assert.ok(body.includes('Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>'))
-      // Trailer must be after all content
-      const coauthorIdx = body.indexOf('Co-Authored-By:')
-      const implIdx = body.indexOf('## Implementation')
-      assert.ok(coauthorIdx > implIdx, 'coauthor trailer should come after Implementation section')
-    } finally {
-      if (oldClaudeCode === undefined) delete process.env.CLAUDECODE
-      else process.env.CLAUDECODE = oldClaudeCode
-    }
+    const body = lastBody(dir)
+    assert.ok(body.includes('## Planning'))
+    assert.ok(body.includes('## Implementation'))
+    assert.ok(body.includes('Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>'))
+    // Trailer must be after all content
+    const coauthorIdx = body.indexOf('Co-Authored-By:')
+    const implIdx = body.indexOf('## Implementation')
+    assert.ok(coauthorIdx > implIdx, 'coauthor trailer should come after Implementation section')
   })
 })
 
@@ -674,13 +618,7 @@ describe('resolveCoauthor', () => {
     )
   })
 
-  it('returns null when CLAUDECODE is not set (auto-detect)', () => {
-    const old = process.env.CLAUDECODE
-    delete process.env.CLAUDECODE
-    try {
-      assert.equal(resolveCoauthor({}, '/some/path'), null)
-    } finally {
-      if (old !== undefined) process.env.CLAUDECODE = old
-    }
+  it('returns null when model is not in transcript (auto-detect)', () => {
+    assert.equal(resolveCoauthor({}, '/dev/null'), null)
   })
 })
