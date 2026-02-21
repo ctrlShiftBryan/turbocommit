@@ -25,7 +25,7 @@ describe('install', () => {
     assert.equal(settings.hooks.Stop[0].hooks[0].command, 'turbocommit run')
   })
 
-  it('appends to the largest existing Stop group', () => {
+  it('creates own group after existing groups', () => {
     const file = tmpSettings({
       hooks: {
         Stop: [{
@@ -38,14 +38,15 @@ describe('install', () => {
     const result = install(file)
     assert.equal(result.alreadyInstalled, false)
     const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
-    // Still one group, now with two hooks
-    assert.equal(settings.hooks.Stop.length, 1)
-    assert.equal(settings.hooks.Stop[0].hooks.length, 2)
+    // Two groups: existing + turbocommit's own
+    assert.equal(settings.hooks.Stop.length, 2)
+    assert.equal(settings.hooks.Stop[0].hooks.length, 1)
     assert.equal(settings.hooks.Stop[0].hooks[0].command, 'prove_it hook claude:Stop')
-    assert.equal(settings.hooks.Stop[0].hooks[1].command, 'turbocommit run')
+    assert.equal(settings.hooks.Stop[1].hooks.length, 1)
+    assert.equal(settings.hooks.Stop[1].hooks[0].command, 'turbocommit run')
   })
 
-  it('picks the largest group when multiple exist', () => {
+  it('appends own group after multiple existing groups', () => {
     const file = tmpSettings({
       hooks: {
         Stop: [
@@ -61,15 +62,15 @@ describe('install', () => {
     })
     install(file)
     const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
-    assert.equal(settings.hooks.Stop.length, 2)
-    // Small group unchanged
+    // Three groups: two existing + turbocommit's own
+    assert.equal(settings.hooks.Stop.length, 3)
     assert.equal(settings.hooks.Stop[0].hooks.length, 1)
-    // Large group got turbocommit appended
-    assert.equal(settings.hooks.Stop[1].hooks.length, 3)
-    assert.equal(settings.hooks.Stop[1].hooks[2].command, 'turbocommit run')
+    assert.equal(settings.hooks.Stop[1].hooks.length, 2)
+    assert.equal(settings.hooks.Stop[2].hooks.length, 1)
+    assert.equal(settings.hooks.Stop[2].hooks[0].command, 'turbocommit run')
   })
 
-  it('appends to the first group when sizes are tied', () => {
+  it('creates own group even when existing groups are same size', () => {
     const file = tmpSettings({
       hooks: {
         Stop: [
@@ -80,12 +81,12 @@ describe('install', () => {
     })
     install(file)
     const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
-    assert.equal(settings.hooks.Stop.length, 2)
-    // First group gets turbocommit (tie-break favors first)
-    assert.equal(settings.hooks.Stop[0].hooks.length, 2)
-    assert.equal(settings.hooks.Stop[0].hooks[1].command, 'turbocommit run')
-    // Second group unchanged
+    // Three groups: two existing + turbocommit's own
+    assert.equal(settings.hooks.Stop.length, 3)
+    assert.equal(settings.hooks.Stop[0].hooks.length, 1)
     assert.equal(settings.hooks.Stop[1].hooks.length, 1)
+    assert.equal(settings.hooks.Stop[2].hooks.length, 1)
+    assert.equal(settings.hooks.Stop[2].hooks[0].command, 'turbocommit run')
   })
 
   it('creates settings file if missing', () => {
@@ -121,7 +122,8 @@ describe('install', () => {
     const result = install(file)
     assert.equal(result.alreadyInstalled, true)
     const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
-    const tcCount = settings.hooks.Stop[0].hooks
+    const tcCount = settings.hooks.Stop
+      .flatMap(g => g.hooks)
       .filter(h => h.command && h.command.includes('turbocommit')).length
     assert.equal(tcCount, 1)
   })

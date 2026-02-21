@@ -44,18 +44,16 @@ describe('doctor', () => {
   after(() => {
     process.env.HOME = realHome
   })
-  it('all ok when hook is installed and last, local config enabled', () => {
+  it('all ok when turbocommit is sole hook in last group', () => {
     const repo = makeRepo()
     writeLocalConfig(repo, { enabled: true })
     writeGlobalConfig({ enabled: true })
     const settings = tmpSettings({
       hooks: {
-        Stop: [{
-          hooks: [
-            { type: 'command', command: 'other-tool' },
-            { type: 'command', command: 'turbocommit run' }
-          ]
-        }]
+        Stop: [
+          { hooks: [{ type: 'command', command: 'other-tool' }] },
+          { hooks: [{ type: 'command', command: 'turbocommit run' }] }
+        ]
       }
     })
 
@@ -82,24 +80,24 @@ describe('doctor', () => {
     assert.equal(hookCheck.status, 'error')
   })
 
-  it('warns when hook is not last in its group', () => {
+  it('warns when turbocommit shares a group with other hooks', () => {
     const repo = makeRepo()
     writeLocalConfig(repo, { enabled: true })
     const settings = tmpSettings({
       hooks: {
         Stop: [{
           hooks: [
-            { type: 'command', command: 'turbocommit run' },
-            { type: 'command', command: 'after-turbocommit' }
+            { type: 'command', command: 'prove_it hook claude:Stop' },
+            { type: 'command', command: 'turbocommit run' }
           ]
         }]
       }
     })
 
     const result = doctor(settings, repo)
-    const lastCheck = result.checks.find(c => c.name === 'Last hook in Stop')
-    assert.equal(lastCheck.status, 'warn')
-    assert.ok(lastCheck.message.includes('not the last hook'))
+    const isoCheck = result.checks.find(c => c.name === 'Group isolation')
+    assert.equal(isoCheck.status, 'warn')
+    assert.ok(isoCheck.message.includes('shares a group'))
   })
 
   it('warns when another group runs after turbocommit group', () => {
@@ -115,14 +113,15 @@ describe('doctor', () => {
     })
 
     const result = doctor(settings, repo)
-    const lastCheck = result.checks.find(c => c.name === 'Last hook in Stop')
-    assert.equal(lastCheck.status, 'warn')
-    assert.ok(lastCheck.message.includes('Another group'))
+    const isoCheck = result.checks.find(c => c.name === 'Group isolation')
+    assert.equal(isoCheck.status, 'warn')
+    assert.ok(isoCheck.message.includes('Another group'))
   })
 
-  it('warns about grouping opportunity when sole hook in own group', () => {
+  it('ok when turbocommit is sole hook in last group with other groups before it', () => {
     const repo = makeRepo()
     writeLocalConfig(repo, { enabled: true })
+    writeGlobalConfig({ enabled: true })
     const settings = tmpSettings({
       hooks: {
         Stop: [
@@ -138,29 +137,9 @@ describe('doctor', () => {
     })
 
     const result = doctor(settings, repo)
-    const groupCheck = result.checks.find(c => c.name === 'Grouping opportunity')
-    assert.ok(groupCheck, 'expected grouping opportunity check')
-    assert.equal(groupCheck.status, 'warn')
-    assert.ok(groupCheck.message.includes('could be combined'))
-  })
-
-  it('does not warn about grouping when turbocommit shares a group', () => {
-    const repo = makeRepo()
-    writeLocalConfig(repo, { enabled: true })
-    const settings = tmpSettings({
-      hooks: {
-        Stop: [{
-          hooks: [
-            { type: 'command', command: 'other-hook' },
-            { type: 'command', command: 'turbocommit run' }
-          ]
-        }]
-      }
-    })
-
-    const result = doctor(settings, repo)
-    const groupCheck = result.checks.find(c => c.name === 'Grouping opportunity')
-    assert.equal(groupCheck, undefined)
+    const isoCheck = result.checks.find(c => c.name === 'Group isolation')
+    assert.equal(isoCheck.status, 'ok')
+    assert.equal(isoCheck.message, 'Sole hook in last group')
   })
 
   it('warns when local config missing and no global config', () => {

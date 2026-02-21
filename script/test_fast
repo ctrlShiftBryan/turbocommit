@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -e
 npx standard --fix
-npm test
+node --test $(ls test/*.test.js | grep -v integration)

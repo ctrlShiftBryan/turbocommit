@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
 set -e
 "$(dirname "$0")/test_fast"
+node --test test/integration.test.js

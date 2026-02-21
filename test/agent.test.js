@@ -1,8 +1,6 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const {
-  DEFAULT_TITLE_PROMPT,
-  DEFAULT_BODY_PROMPT,
   renderPrompt,
   runAgent,
   runTitleAgent,
@@ -62,7 +60,8 @@ describe('runAgent', () => {
   it('clears CLAUDECODE in child env', () => {
     process.env.CLAUDECODE = 'something'
     try {
-      const result = runAgent('/tmp', 'echo "CLAUDECODE=${CLAUDECODE:-empty}"', 'ignored')
+      const cmd = 'echo "CLAUDECODE=${CLAUDECODE:-empty}"' // eslint-disable-line no-template-curly-in-string
+      const result = runAgent('/tmp', cmd, 'ignored')
       assert.equal(result, 'CLAUDECODE=empty')
     } finally {
       delete process.env.CLAUDECODE

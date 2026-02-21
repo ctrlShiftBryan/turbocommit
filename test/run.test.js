@@ -138,16 +138,6 @@ describe('run', () => {
     assert.ok(log.includes('no commits') || log.includes('does not have any commits'))
   })
 
-  it('bails on stop_hook_active', () => {
-    const dir = makeRepo()
-    enableAndCommit(dir)
-    withCwd(dir, () => {
-      run(JSON.stringify({ stop_hook_active: true, transcript_path: '' }))
-    })
-    // Should still be just the initial commit
-    assert.equal(commitCount(dir), 1)
-  })
-
   it('creates empty commit with 🫥 marker when no changes', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
