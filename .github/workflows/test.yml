@@ -22,4 +22,4 @@ jobs:
         run: npx standard
 
       - name: Run tests
-        run: node --test $(ls test/*.test.js | grep -v integration)
+        run: npm test

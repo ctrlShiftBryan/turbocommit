@@ -5,6 +5,13 @@ const path = require('path')
 const os = require('os')
 const { execSync, spawnSync } = require('child_process')
 
+function hasClaude () {
+  const r = spawnSync('which claude', { shell: true, encoding: 'utf8' })
+  return r.status === 0
+}
+
+const SKIP = !hasClaude() && 'claude not found in PATH'
+
 function makeProject (opts = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-integ-'))
   execSync('git init', { cwd: dir, stdio: 'pipe' })
@@ -71,7 +78,7 @@ function runClaude (dir, prompt) {
   return r.stdout
 }
 
-describe('integration', () => {
+describe('integration', { skip: SKIP }, () => {
   it('turbocommit commits on stop', () => {
     const { dir, hookLog } = makeProject()
     const before = commitCount(dir)
