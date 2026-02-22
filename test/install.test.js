@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
 const os = require('os')
-const { install, uninstall, hasTurbocommit } = require('../lib/install')
+const { install, uninstall, hasTurbocommit, isFullyInstalled, HOOK_DEFS } = require('../lib/install')
 
 function tmpSettings (content) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-install-'))
@@ -15,78 +15,63 @@ function tmpSettings (content) {
 }
 
 describe('install', () => {
-  it('creates a new group when no Stop groups exist', () => {
+  it('installs all 4 hook events when no hooks exist', () => {
     const file = tmpSettings({})
     const result = install(file)
     assert.equal(result.alreadyInstalled, false)
     const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
-    assert.equal(settings.hooks.Stop.length, 1)
-    assert.equal(settings.hooks.Stop[0].hooks.length, 1)
-    assert.equal(settings.hooks.Stop[0].hooks[0].command, 'turbocommit run')
+    for (const event of Object.keys(HOOK_DEFS)) {
+      assert.ok(settings.hooks[event], `expected ${event} hook group`)
+      assert.ok(hasTurbocommit(settings.hooks[event]), `expected turbocommit in ${event}`)
+    }
   })
 
-  it('creates own group after existing groups', () => {
+  it('PreToolUse group includes matcher', () => {
+    const file = tmpSettings({})
+    install(file)
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
+    const ptGroup = settings.hooks.PreToolUse.find(g =>
+      g.hooks.some(h => h.command && h.command.includes('turbocommit'))
+    )
+    assert.ok(ptGroup.matcher, 'PreToolUse group should have a matcher')
+    assert.ok(ptGroup.matcher.includes('Write'))
+    assert.ok(ptGroup.matcher.includes('mcp__'))
+  })
+
+  it('Stop hook uses turbocommit hook stop command', () => {
+    const file = tmpSettings({})
+    install(file)
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
+    const stopHook = settings.hooks.Stop
+      .flatMap(g => g.hooks)
+      .find(h => h.command && h.command.includes('turbocommit'))
+    assert.equal(stopHook.command, 'turbocommit hook stop')
+  })
+
+  it('creates own group after existing groups in each event', () => {
     const file = tmpSettings({
       hooks: {
         Stop: [{
           hooks: [
             { type: 'command', command: 'prove_it hook claude:Stop' }
           ]
+        }],
+        PreToolUse: [{
+          matcher: 'Edit',
+          hooks: [{ type: 'command', command: 'prove_it hook claude:PreToolUse' }]
         }]
       }
     })
     const result = install(file)
     assert.equal(result.alreadyInstalled, false)
     const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
-    // Two groups: existing + turbocommit's own
+    // Stop: existing + turbocommit
     assert.equal(settings.hooks.Stop.length, 2)
-    assert.equal(settings.hooks.Stop[0].hooks.length, 1)
     assert.equal(settings.hooks.Stop[0].hooks[0].command, 'prove_it hook claude:Stop')
-    assert.equal(settings.hooks.Stop[1].hooks.length, 1)
-    assert.equal(settings.hooks.Stop[1].hooks[0].command, 'turbocommit run')
-  })
-
-  it('appends own group after multiple existing groups', () => {
-    const file = tmpSettings({
-      hooks: {
-        Stop: [
-          { hooks: [{ type: 'command', command: 'small' }] },
-          {
-            hooks: [
-              { type: 'command', command: 'big-a' },
-              { type: 'command', command: 'big-b' }
-            ]
-          }
-        ]
-      }
-    })
-    install(file)
-    const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
-    // Three groups: two existing + turbocommit's own
-    assert.equal(settings.hooks.Stop.length, 3)
-    assert.equal(settings.hooks.Stop[0].hooks.length, 1)
-    assert.equal(settings.hooks.Stop[1].hooks.length, 2)
-    assert.equal(settings.hooks.Stop[2].hooks.length, 1)
-    assert.equal(settings.hooks.Stop[2].hooks[0].command, 'turbocommit run')
-  })
-
-  it('creates own group even when existing groups are same size', () => {
-    const file = tmpSettings({
-      hooks: {
-        Stop: [
-          { hooks: [{ type: 'command', command: 'first-group' }] },
-          { hooks: [{ type: 'command', command: 'second-group' }] }
-        ]
-      }
-    })
-    install(file)
-    const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
-    // Three groups: two existing + turbocommit's own
-    assert.equal(settings.hooks.Stop.length, 3)
-    assert.equal(settings.hooks.Stop[0].hooks.length, 1)
-    assert.equal(settings.hooks.Stop[1].hooks.length, 1)
-    assert.equal(settings.hooks.Stop[2].hooks.length, 1)
-    assert.equal(settings.hooks.Stop[2].hooks[0].command, 'turbocommit run')
+    assert.equal(settings.hooks.Stop[1].hooks[0].command, 'turbocommit hook stop')
+    // PreToolUse: existing + turbocommit
+    assert.equal(settings.hooks.PreToolUse.length, 2)
+    assert.equal(settings.hooks.PreToolUse[0].hooks[0].command, 'prove_it hook claude:PreToolUse')
   })
 
   it('creates settings file if missing', () => {
@@ -97,38 +82,46 @@ describe('install', () => {
     assert.ok(fs.existsSync(file))
   })
 
-  it('reports already installed when hook exists', () => {
-    const file = tmpSettings({
-      hooks: {
-        Stop: [{
-          hooks: [
-            { type: 'command', command: 'prove_it hook claude:Stop' },
-            { type: 'command', command: 'turbocommit run' }
-          ]
-        }]
-      }
-    })
+  it('reports already installed when all hooks exist', () => {
+    const file = tmpSettings({})
+    install(file)
     const result = install(file)
     assert.equal(result.alreadyInstalled, true)
   })
 
   it('is idempotent — no duplicates on re-install', () => {
-    const file = tmpSettings({
-      hooks: {
-        Stop: [{ hooks: [{ type: 'command', command: 'other-tool' }] }]
-      }
-    })
+    const file = tmpSettings({})
     install(file)
-    const result = install(file)
-    assert.equal(result.alreadyInstalled, true)
+    install(file)
     const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
-    const tcCount = settings.hooks.Stop
-      .flatMap(g => g.hooks)
-      .filter(h => h.command && h.command.includes('turbocommit')).length
-    assert.equal(tcCount, 1)
+    for (const event of Object.keys(HOOK_DEFS)) {
+      const tcCount = settings.hooks[event]
+        .flatMap(g => g.hooks)
+        .filter(h => h.command && h.command.includes('turbocommit')).length
+      assert.equal(tcCount, 1, `expected exactly 1 turbocommit hook in ${event}`)
+    }
   })
 
-  it('preserves other event hooks', () => {
+  it('cleans up old turbocommit run on install', () => {
+    const file = tmpSettings({
+      hooks: {
+        Stop: [{ hooks: [{ type: 'command', command: 'turbocommit run' }] }]
+      }
+    })
+    const result = install(file)
+    assert.equal(result.alreadyInstalled, false)
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
+    // Old `turbocommit run` should be gone
+    const allCommands = Object.values(settings.hooks)
+      .flat()
+      .flatMap(g => g.hooks)
+      .map(h => h.command)
+    assert.ok(!allCommands.includes('turbocommit run'))
+    // New hooks should be installed
+    assert.ok(allCommands.includes('turbocommit hook stop'))
+  })
+
+  it('preserves other non-turbocommit hooks', () => {
     const file = tmpSettings({
       hooks: {
         Stop: [{ hooks: [{ type: 'command', command: 'other-tool run' }] }],
@@ -137,39 +130,63 @@ describe('install', () => {
     })
     install(file)
     const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
-    assert.ok(settings.hooks.PreToolUse)
-    assert.equal(settings.hooks.PreToolUse[0].hooks[0].command, 'prove_it hook claude:PreToolUse')
+    assert.ok(settings.hooks.PreToolUse.some(g =>
+      g.hooks.some(h => h.command === 'prove_it hook claude:PreToolUse')
+    ))
+    assert.ok(settings.hooks.Stop.some(g =>
+      g.hooks.some(h => h.command === 'other-tool run')
+    ))
   })
 })
 
 describe('uninstall', () => {
-  it('removes turbocommit hook from within a group', () => {
+  it('removes turbocommit hooks from all events', () => {
+    const file = tmpSettings({})
+    install(file)
+    const result = uninstall(file)
+    assert.equal(result.wasInstalled, true)
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
+    for (const event of Object.keys(HOOK_DEFS)) {
+      assert.ok(!settings.hooks[event], `expected ${event} to be removed (was only turbocommit)`)
+    }
+  })
+
+  it('preserves other hooks in same event when uninstalling', () => {
     const file = tmpSettings({
       hooks: {
-        Stop: [{
-          hooks: [
-            { type: 'command', command: 'prove_it hook claude:Stop' },
-            { type: 'command', command: 'turbocommit run' }
-          ]
-        }]
+        Stop: [
+          { hooks: [{ type: 'command', command: 'prove_it hook claude:Stop' }] },
+          { hooks: [{ type: 'command', command: 'turbocommit hook stop' }] }
+        ],
+        PreToolUse: [
+          { matcher: 'Edit', hooks: [{ type: 'command', command: 'prove_it hook claude:PreToolUse' }] },
+          { matcher: 'Write', hooks: [{ type: 'command', command: 'turbocommit hook pre-tool-use' }] }
+        ],
+        SessionStart: [{ hooks: [{ type: 'command', command: 'turbocommit hook session-start' }] }],
+        SessionEnd: [{ hooks: [{ type: 'command', command: 'turbocommit hook session-end' }] }]
       }
     })
     const result = uninstall(file)
     assert.equal(result.wasInstalled, true)
     const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
-    // Group still exists with prove_it, turbocommit removed
+    // prove_it hooks should remain
     assert.equal(settings.hooks.Stop.length, 1)
-    assert.equal(settings.hooks.Stop[0].hooks.length, 1)
     assert.equal(settings.hooks.Stop[0].hooks[0].command, 'prove_it hook claude:Stop')
+    assert.equal(settings.hooks.PreToolUse.length, 1)
+    assert.equal(settings.hooks.PreToolUse[0].hooks[0].command, 'prove_it hook claude:PreToolUse')
+    // SessionStart/End should be completely removed
+    assert.equal(settings.hooks.SessionStart, undefined)
+    assert.equal(settings.hooks.SessionEnd, undefined)
   })
 
-  it('removes entire group if turbocommit was the only hook', () => {
+  it('removes old turbocommit run entries too', () => {
     const file = tmpSettings({
       hooks: {
         Stop: [{ hooks: [{ type: 'command', command: 'turbocommit run' }] }]
       }
     })
-    uninstall(file)
+    const result = uninstall(file)
+    assert.equal(result.wasInstalled, true)
     const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
     assert.equal(settings.hooks.Stop, undefined)
   })
@@ -197,15 +214,42 @@ describe('hasTurbocommit', () => {
     assert.equal(hasTurbocommit(null), false)
   })
 
-  it('returns true when turbocommit hook exists in a group', () => {
+  it('returns true for turbocommit hook stop', () => {
     assert.equal(
       hasTurbocommit([{
-        hooks: [
-          { type: 'command', command: 'other' },
-          { type: 'command', command: 'turbocommit run' }
-        ]
+        hooks: [{ type: 'command', command: 'turbocommit hook stop' }]
       }]),
       true
     )
+  })
+
+  it('returns true for old turbocommit run', () => {
+    assert.equal(
+      hasTurbocommit([{
+        hooks: [{ type: 'command', command: 'turbocommit run' }]
+      }]),
+      true
+    )
+  })
+})
+
+describe('isFullyInstalled', () => {
+  it('returns true when all 4 hooks present', () => {
+    const file = tmpSettings({})
+    install(file)
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
+    assert.equal(isFullyInstalled(settings), true)
+  })
+
+  it('returns false when only Stop installed', () => {
+    assert.equal(isFullyInstalled({
+      hooks: {
+        Stop: [{ hooks: [{ type: 'command', command: 'turbocommit hook stop' }] }]
+      }
+    }), false)
+  })
+
+  it('returns false for null settings', () => {
+    assert.equal(isFullyInstalled(null), false)
   })
 })

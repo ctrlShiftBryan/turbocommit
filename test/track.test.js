@@ -1,0 +1,228 @@
+const { describe, it, beforeEach } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('fs')
+const path = require('path')
+const os = require('os')
+const { handleTrack, hasTrackedModifications, cleanupTracking, extractFilePath, trackingPath } = require('../lib/track')
+
+function tmpRoot () {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-track-'))
+  fs.mkdirSync(path.join(dir, '.git'), { recursive: true })
+  return dir
+}
+
+function makeInput (overrides) {
+  return JSON.stringify({
+    session_id: 'sess-1',
+    tool_name: 'Write',
+    tool_input: { file_path: '/tmp/foo.txt' },
+    ...overrides
+  })
+}
+
+function readTracking (root, sessionId) {
+  const file = trackingPath(root, sessionId)
+  try {
+    return fs.readFileSync(file, 'utf8').trim().split('\n').map(l => JSON.parse(l))
+  } catch {
+    return []
+  }
+}
+
+describe('handleTrack', () => {
+  let root
+  beforeEach(() => { root = tmpRoot() })
+
+  it('records Write tool with file_path', () => {
+    handleTrack(makeInput({ tool_name: 'Write', tool_input: { file_path: '/tmp/a.txt' } }), root)
+    const entries = readTracking(root, 'sess-1')
+    assert.equal(entries.length, 1)
+    assert.equal(entries[0].tool, 'Write')
+    assert.equal(entries[0].file, '/tmp/a.txt')
+    assert.equal(typeof entries[0].t, 'number')
+  })
+
+  it('records Edit tool with file_path', () => {
+    handleTrack(makeInput({ tool_name: 'Edit', tool_input: { file_path: '/tmp/b.txt' } }), root)
+    const entries = readTracking(root, 'sess-1')
+    assert.equal(entries.length, 1)
+    assert.equal(entries[0].tool, 'Edit')
+    assert.equal(entries[0].file, '/tmp/b.txt')
+  })
+
+  it('records MCP tool and extracts file path from tool_input', () => {
+    handleTrack(makeInput({
+      tool_name: 'mcp__xcode__XcodeEdit',
+      tool_input: { filePath: '/tmp/View.swift' }
+    }), root)
+    const entries = readTracking(root, 'sess-1')
+    assert.equal(entries.length, 1)
+    assert.equal(entries[0].tool, 'mcp__xcode__XcodeEdit')
+    assert.equal(entries[0].file, '/tmp/View.swift')
+  })
+
+  it('records Bash tool with command', () => {
+    handleTrack(makeInput({
+      tool_name: 'Bash',
+      tool_input: { command: 'npm install' }
+    }), root)
+    const entries = readTracking(root, 'sess-1')
+    assert.equal(entries.length, 1)
+    assert.equal(entries[0].tool, 'Bash')
+    assert.equal(entries[0].command, 'npm install')
+  })
+
+  it('records MCP tool even without extractable file path', () => {
+    handleTrack(makeInput({
+      tool_name: 'mcp__xcode__XcodeEdit',
+      tool_input: { query: 'modify something' }
+    }), root)
+    const entries = readTracking(root, 'sess-1')
+    assert.equal(entries.length, 1)
+    assert.equal(entries[0].tool, 'mcp__xcode__XcodeEdit')
+    assert.equal(entries[0].file, undefined)
+  })
+
+  it('records MultiEdit tool (nested file paths in edits array)', () => {
+    handleTrack(makeInput({
+      tool_name: 'MultiEdit',
+      tool_input: { edits: [{ file_path: '/a.txt', old_string: 'x', new_string: 'y' }] }
+    }), root)
+    const entries = readTracking(root, 'sess-1')
+    assert.equal(entries.length, 1)
+    assert.equal(entries[0].tool, 'MultiEdit')
+    assert.equal(hasTrackedModifications(root, 'sess-1'), true)
+  })
+
+  it('skips Bash with no command string', () => {
+    handleTrack(makeInput({
+      tool_name: 'Bash',
+      tool_input: {}
+    }), root)
+    const entries = readTracking(root, 'sess-1')
+    assert.equal(entries.length, 0)
+  })
+
+  it('appends multiple entries to same session', () => {
+    handleTrack(makeInput({ tool_input: { file_path: '/a.txt' } }), root)
+    handleTrack(makeInput({ tool_input: { file_path: '/b.txt' } }), root)
+    const entries = readTracking(root, 'sess-1')
+    assert.equal(entries.length, 2)
+  })
+
+  it('does nothing with invalid JSON input', () => {
+    handleTrack('not json', root)
+    // No crash
+  })
+
+  it('does nothing without session_id', () => {
+    handleTrack(JSON.stringify({ tool_name: 'Write', tool_input: { file_path: '/tmp/x' } }), root)
+    // No tracking file created (no session_id dir to check)
+  })
+
+  it('does nothing without root', () => {
+    handleTrack(makeInput(), null)
+    // No crash
+  })
+
+  it('extracts file from notebook_path key', () => {
+    handleTrack(makeInput({
+      tool_name: 'NotebookEdit',
+      tool_input: { notebook_path: '/tmp/nb.ipynb' }
+    }), root)
+    const entries = readTracking(root, 'sess-1')
+    assert.equal(entries.length, 1)
+    assert.equal(entries[0].file, '/tmp/nb.ipynb')
+  })
+})
+
+describe('hasTrackedModifications', () => {
+  let root
+  beforeEach(() => { root = tmpRoot() })
+
+  it('returns true when tracking file has Write entries', () => {
+    handleTrack(makeInput(), root)
+    assert.equal(hasTrackedModifications(root, 'sess-1'), true)
+  })
+
+  it('returns false when tracking file is missing', () => {
+    assert.equal(hasTrackedModifications(root, 'sess-1'), false)
+  })
+
+  it('returns false when tracking file is empty', () => {
+    const file = trackingPath(root, 'sess-1')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, '')
+    assert.equal(hasTrackedModifications(root, 'sess-1'), false)
+  })
+
+  it('returns false when only Bash entries exist', () => {
+    handleTrack(makeInput({
+      tool_name: 'Bash',
+      tool_input: { command: 'ls src/' }
+    }), root)
+    handleTrack(makeInput({
+      tool_name: 'Bash',
+      tool_input: { command: 'git status' }
+    }), root)
+    assert.equal(hasTrackedModifications(root, 'sess-1'), false)
+  })
+
+  it('returns true when Bash entries exist alongside Write', () => {
+    handleTrack(makeInput({
+      tool_name: 'Bash',
+      tool_input: { command: 'npm test' }
+    }), root)
+    handleTrack(makeInput({
+      tool_name: 'Write',
+      tool_input: { file_path: '/tmp/x.txt' }
+    }), root)
+    assert.equal(hasTrackedModifications(root, 'sess-1'), true)
+  })
+})
+
+describe('cleanupTracking', () => {
+  it('deletes the tracking file', () => {
+    const root = tmpRoot()
+    handleTrack(makeInput(), root)
+    assert.equal(hasTrackedModifications(root, 'sess-1'), true)
+    cleanupTracking(root, 'sess-1')
+    assert.equal(hasTrackedModifications(root, 'sess-1'), false)
+  })
+
+  it('does not throw when file is missing', () => {
+    const root = tmpRoot()
+    cleanupTracking(root, 'nonexistent')
+    // No crash
+  })
+})
+
+describe('extractFilePath', () => {
+  it('finds file_path key', () => {
+    assert.equal(extractFilePath({ file_path: '/a' }), '/a')
+  })
+
+  it('finds filePath key', () => {
+    assert.equal(extractFilePath({ filePath: '/b' }), '/b')
+  })
+
+  it('finds path key', () => {
+    assert.equal(extractFilePath({ path: '/c' }), '/c')
+  })
+
+  it('finds file key', () => {
+    assert.equal(extractFilePath({ file: '/d' }), '/d')
+  })
+
+  it('returns null for no match', () => {
+    assert.equal(extractFilePath({ query: 'hello' }), null)
+  })
+
+  it('returns null for null input', () => {
+    assert.equal(extractFilePath(null), null)
+  })
+
+  it('prefers file_path over other keys', () => {
+    assert.equal(extractFilePath({ file_path: '/a', path: '/b' }), '/a')
+  })
+})

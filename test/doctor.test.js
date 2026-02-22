@@ -5,6 +5,7 @@ const path = require('path')
 const os = require('os')
 const { execSync } = require('child_process')
 const { doctor } = require('../lib/doctor')
+const { HOOK_DEFS } = require('../lib/install')
 
 function tmpSettings (content) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-doctor-'))
@@ -13,6 +14,20 @@ function tmpSettings (content) {
     fs.writeFileSync(file, JSON.stringify(content, null, 2))
   }
   return file
+}
+
+/**
+ * Build settings object with all 4 turbocommit hooks installed.
+ * Accepts optional overrides to modify specific events.
+ */
+function fullHookSettings (overrides) {
+  const hooks = {}
+  for (const [event, def] of Object.entries(HOOK_DEFS)) {
+    const group = { hooks: [...def.hooks] }
+    if (def.matcher) group.matcher = def.matcher
+    hooks[event] = [group]
+  }
+  return { hooks, ...overrides }
 }
 
 function makeRepo () {
@@ -44,18 +59,11 @@ describe('doctor', () => {
   after(() => {
     process.env.HOME = realHome
   })
-  it('all ok when turbocommit is sole hook in last group', () => {
+  it('all ok when all hooks installed and config valid', () => {
     const repo = makeRepo()
     writeLocalConfig(repo, { enabled: true })
     writeGlobalConfig({ enabled: true })
-    const settings = tmpSettings({
-      hooks: {
-        Stop: [
-          { hooks: [{ type: 'command', command: 'other-tool' }] },
-          { hooks: [{ type: 'command', command: 'turbocommit run' }] }
-        ]
-      }
-    })
+    const settings = tmpSettings(fullHookSettings())
 
     const result = doctor(settings, repo)
     assert.equal(result.ok, true)
@@ -72,45 +80,55 @@ describe('doctor', () => {
     assert.equal(result.checks[0].status, 'error')
   })
 
-  it('errors when hook not installed', () => {
+  it('errors when hooks not installed', () => {
     const settings = tmpSettings({ hooks: {} })
     const result = doctor(settings, os.tmpdir())
     assert.equal(result.ok, false)
-    const hookCheck = result.checks.find(c => c.name === 'Hook installed')
+    const hookCheck = result.checks.find(c => c.name === 'Hooks installed')
     assert.equal(hookCheck.status, 'error')
   })
 
-  it('warns when turbocommit shares a group with other hooks', () => {
-    const repo = makeRepo()
-    writeLocalConfig(repo, { enabled: true })
+  it('errors when only Stop hook is installed (partial)', () => {
     const settings = tmpSettings({
       hooks: {
-        Stop: [{
-          hooks: [
-            { type: 'command', command: 'prove_it hook claude:Stop' },
-            { type: 'command', command: 'turbocommit run' }
-          ]
-        }]
+        Stop: [{ hooks: [{ type: 'command', command: 'turbocommit hook stop' }] }]
       }
     })
+    const result = doctor(settings, os.tmpdir())
+    assert.equal(result.ok, false)
+    const hookCheck = result.checks.find(c => c.name === 'Hooks installed')
+    assert.equal(hookCheck.status, 'error')
+    assert.ok(hookCheck.message.includes('Missing'))
+  })
+
+  it('warns when turbocommit shares a Stop group with other hooks', () => {
+    const repo = makeRepo()
+    writeLocalConfig(repo, { enabled: true })
+    // Build full settings but modify Stop to share a group
+    const s = fullHookSettings()
+    s.hooks.Stop = [{
+      hooks: [
+        { type: 'command', command: 'prove_it hook claude:Stop' },
+        { type: 'command', command: 'turbocommit hook stop' }
+      ]
+    }]
+    const settings = tmpSettings(s)
 
     const result = doctor(settings, repo)
     const isoCheck = result.checks.find(c => c.name === 'Group isolation')
     assert.equal(isoCheck.status, 'warn')
-    assert.ok(isoCheck.message.includes('shares a group'))
+    assert.ok(isoCheck.message.includes('shares a'))
   })
 
-  it('warns when another group runs after turbocommit group', () => {
+  it('warns when another group runs after turbocommit in Stop', () => {
     const repo = makeRepo()
     writeLocalConfig(repo, { enabled: true })
-    const settings = tmpSettings({
-      hooks: {
-        Stop: [
-          { hooks: [{ type: 'command', command: 'turbocommit run' }] },
-          { hooks: [{ type: 'command', command: 'later-group-hook' }] }
-        ]
-      }
-    })
+    const s = fullHookSettings()
+    s.hooks.Stop = [
+      { hooks: [{ type: 'command', command: 'turbocommit hook stop' }] },
+      { hooks: [{ type: 'command', command: 'later-group-hook' }] }
+    ]
+    const settings = tmpSettings(s)
 
     const result = doctor(settings, repo)
     const isoCheck = result.checks.find(c => c.name === 'Group isolation')
@@ -118,37 +136,26 @@ describe('doctor', () => {
     assert.ok(isoCheck.message.includes('Another group'))
   })
 
-  it('ok when turbocommit is sole hook in last group with other groups before it', () => {
+  it('ok when turbocommit is sole hook in last Stop group', () => {
     const repo = makeRepo()
     writeLocalConfig(repo, { enabled: true })
     writeGlobalConfig({ enabled: true })
-    const settings = tmpSettings({
-      hooks: {
-        Stop: [
-          {
-            hooks: [
-              { type: 'command', command: 'hook-a' },
-              { type: 'command', command: 'hook-b' }
-            ]
-          },
-          { hooks: [{ type: 'command', command: 'turbocommit run' }] }
-        ]
-      }
-    })
+    const s = fullHookSettings()
+    s.hooks.Stop = [
+      { hooks: [{ type: 'command', command: 'hook-a' }, { type: 'command', command: 'hook-b' }] },
+      { hooks: [{ type: 'command', command: 'turbocommit hook stop' }] }
+    ]
+    const settings = tmpSettings(s)
 
     const result = doctor(settings, repo)
     const isoCheck = result.checks.find(c => c.name === 'Group isolation')
     assert.equal(isoCheck.status, 'ok')
-    assert.equal(isoCheck.message, 'Sole hook in last group')
+    assert.ok(isoCheck.message.includes('Sole hook'))
   })
 
   it('warns when local config missing and no global config', () => {
     const repo = makeRepo()
-    const settings = tmpSettings({
-      hooks: {
-        Stop: [{ hooks: [{ type: 'command', command: 'turbocommit run' }] }]
-      }
-    })
+    const settings = tmpSettings(fullHookSettings())
 
     const result = doctor(settings, repo)
     const localCheck = result.checks.find(c => c.name === 'Local config')
@@ -159,11 +166,7 @@ describe('doctor', () => {
   it('shows info for missing local config when global config exists', () => {
     const repo = makeRepo()
     writeGlobalConfig({ enabled: true })
-    const settings = tmpSettings({
-      hooks: {
-        Stop: [{ hooks: [{ type: 'command', command: 'turbocommit run' }] }]
-      }
-    })
+    const settings = tmpSettings(fullHookSettings())
 
     const result = doctor(settings, repo)
     const localCheck = result.checks.find(c => c.name === 'Local config')
@@ -174,11 +177,7 @@ describe('doctor', () => {
   it('reports enabled from global-only config', () => {
     const repo = makeRepo()
     writeGlobalConfig({ enabled: true })
-    const settings = tmpSettings({
-      hooks: {
-        Stop: [{ hooks: [{ type: 'command', command: 'turbocommit run' }] }]
-      }
-    })
+    const settings = tmpSettings(fullHookSettings())
 
     const result = doctor(settings, repo)
     const enabledCheck = result.checks.find(c => c.name === 'Enabled')
@@ -189,11 +188,7 @@ describe('doctor', () => {
   it('warns when enabled is false in merged config', () => {
     const repo = makeRepo()
     writeLocalConfig(repo, { enabled: false })
-    const settings = tmpSettings({
-      hooks: {
-        Stop: [{ hooks: [{ type: 'command', command: 'turbocommit run' }] }]
-      }
-    })
+    const settings = tmpSettings(fullHookSettings())
 
     const result = doctor(settings, repo)
     const enabledCheck = result.checks.find(c => c.name === 'Enabled')
@@ -202,11 +197,7 @@ describe('doctor', () => {
 
   it('warns when neither global nor local sets enabled', () => {
     const repo = makeRepo()
-    const settings = tmpSettings({
-      hooks: {
-        Stop: [{ hooks: [{ type: 'command', command: 'turbocommit run' }] }]
-      }
-    })
+    const settings = tmpSettings(fullHookSettings())
 
     const result = doctor(settings, repo)
     const enabledCheck = result.checks.find(c => c.name === 'Enabled')
@@ -215,11 +206,7 @@ describe('doctor', () => {
 
   it('skips local checks gracefully when not in a git repo', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-doctor-'))
-    const settings = tmpSettings({
-      hooks: {
-        Stop: [{ hooks: [{ type: 'command', command: 'turbocommit run' }] }]
-      }
-    })
+    const settings = tmpSettings(fullHookSettings())
 
     const result = doctor(settings, dir)
     assert.equal(result.ok, true)

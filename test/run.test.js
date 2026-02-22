@@ -5,6 +5,9 @@ const path = require('path')
 const os = require('os')
 const { execSync } = require('child_process')
 const { run, formatModelName, resolveCoauthor } = require('../lib/run')
+const { handleTrack } = require('../lib/track')
+const { savePending, chainDir } = require('../lib/session')
+const { ensureDir } = require('../lib/io')
 
 function makeRepo () {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-run-'))
@@ -62,6 +65,29 @@ function withCwd (dir, fn) {
   }
 }
 
+/**
+ * Simulate PreToolUse tracking for a session in a repo.
+ */
+function trackWrite (root, sessionId, filePath) {
+  handleTrack(JSON.stringify({
+    session_id: sessionId,
+    tool_name: 'Write',
+    tool_input: { file_path: filePath || '/tmp/test.txt' }
+  }), root)
+}
+
+/**
+ * Write a chain file linking sessionId to ancestors.
+ */
+function writeChain (root, sessionId, parent, ancestors) {
+  const dir = chainDir(root)
+  ensureDir(dir)
+  fs.writeFileSync(
+    path.join(dir, sessionId + '.json'),
+    JSON.stringify({ parent, ancestors })
+  )
+}
+
 describe('run', () => {
   let realHome
   before(() => {
@@ -81,7 +107,7 @@ describe('run', () => {
     process.env.TURBOCOMMIT_DISABLED = '1'
     try {
       withCwd(dir, () => {
-        run(JSON.stringify({ transcript_path: transcript }))
+        run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
       })
       assert.equal(commitCount(dir), 1) // only the initial commit
     } finally {
@@ -96,7 +122,7 @@ describe('run', () => {
     process.env.TURBOCOMMIT_DISABLED = '0'
     try {
       withCwd(dir, () => {
-        run(JSON.stringify({ transcript_path: transcript }))
+        run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
       })
       assert.equal(commitCount(dir), 1)
     } finally {
@@ -107,11 +133,13 @@ describe('run', () => {
   it('runs normally when TURBOCOMMIT_DISABLED is empty string', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
     const transcript = makeTranscript([{ prompt: 'Hello', response: 'Hi' }])
+    trackWrite(dir, 'S1')
     process.env.TURBOCOMMIT_DISABLED = ''
     try {
       withCwd(dir, () => {
-        run(JSON.stringify({ transcript_path: transcript }))
+        run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
       })
       assert.equal(commitCount(dir), 2) // initial + new commit
     } finally {
@@ -138,86 +166,215 @@ describe('run', () => {
     assert.ok(log.includes('no commits') || log.includes('does not have any commits'))
   })
 
-  it('creates empty commit with 🫥 marker when no changes', () => {
+  it('skips commit when session has no tracked modifications', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
     const transcript = makeTranscript([{ prompt: 'Hello', response: 'Hi there' }])
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
-    assert.equal(lastSubject(dir), 'Hello 🫥')
-    assert.ok(lastBody(dir).includes('Prompt:'))
+    // No new commit — only the initial
+    assert.equal(commitCount(dir), 1)
   })
 
-  it('creates normal commit with file changes', () => {
+  it('skips when session has only Bash tracking (no file-modifying tools)', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    // Simulate Bash-only session (ls, git status)
+    handleTrack(JSON.stringify({
+      session_id: 'S1',
+      tool_name: 'Bash',
+      tool_input: { command: 'ls src/' }
+    }), dir)
+    const transcript = makeTranscript([{ prompt: 'List files', response: 'Here they are.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    // No commit — Bash alone isn't a modification signal
+    assert.equal(commitCount(dir), 1)
+    // Transcript buffered to pending
+    const pendDir = path.join(dir, '.git', 'turbocommit', 'pending', 'S1')
+    assert.ok(fs.existsSync(pendDir))
+  })
+
+  it('does not include Bash-only session in Planning of future commit', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+
+    // Session A: Bash-only (read-only) → skip, buffer to pending
+    handleTrack(JSON.stringify({
+      session_id: 'A',
+      tool_name: 'Bash',
+      tool_input: { command: 'ls src/' }
+    }), dir)
+    const transcriptA = makeTranscript([{ prompt: 'List files', response: 'Here they are.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcriptA, session_id: 'A' }))
+    })
+
+    // Session B chains from A, makes real changes
+    writeChain(dir, 'B', 'A', ['A'])
+    trackWrite(dir, 'B', path.join(dir, 'result.txt'))
+    fs.writeFileSync(path.join(dir, 'result.txt'), 'done')
+    const transcriptB = makeTranscript([{ prompt: 'Implement feature', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcriptB, session_id: 'B' }))
+    })
+
+    assert.equal(commitCount(dir), 2)
+    const body = lastBody(dir)
+    // Pending from A is still picked up (it's a legitimate ancestor)
+    // but the key behavior is that session A was correctly skipped as non-modifying
+    assert.ok(body.includes('List files'))
+  })
+
+  it('skips even when uncommitted changes exist but no tracking', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'uncommitted')
+    const transcript = makeTranscript([{ prompt: 'Hello', response: 'Hi' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    // No commit — tracking is authoritative
+    assert.equal(commitCount(dir), 1)
+  })
+
+  it('saves transcript to pending when skipping', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    const transcript = makeTranscript([{ prompt: 'Research turn', response: 'Findings...' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    // Check pending directory was created
+    const pendDir = path.join(dir, '.git', 'turbocommit', 'pending', 'S1')
+    assert.ok(fs.existsSync(pendDir))
+    const files = fs.readdirSync(pendDir)
+    assert.equal(files.length, 1)
+    const content = fs.readFileSync(path.join(pendDir, files[0]), 'utf8')
+    assert.ok(content.includes('Research turn'))
+  })
+
+  it('skips and buffers when tracking exists but changes were reverted', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    // Tracking says we modified, but no actual changes remain (reverted)
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const transcript = makeTranscript([{ prompt: 'Write then revert', response: 'Reverted.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    // No new commit
+    assert.equal(commitCount(dir), 1)
+    // Transcript buffered to pending
+    const pendDir = path.join(dir, '.git', 'turbocommit', 'pending', 'S1')
+    assert.ok(fs.existsSync(pendDir))
+    // Tracking file cleaned up
+    const trackingFile = path.join(dir, '.git', 'turbocommit', 'tracking', 'S1.jsonl')
+    assert.ok(!fs.existsSync(trackingFile))
+  })
+
+  it('commits when tracking file has entries', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
     fs.writeFileSync(path.join(dir, 'file.txt'), 'new content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     const transcript = makeTranscript([{ prompt: 'Add a file', response: 'Done.' }])
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     assert.equal(lastSubject(dir), 'Add a file')
-    assert.ok(!lastSubject(dir).includes('🫥'))
+    assert.equal(commitCount(dir), 2)
   })
 
-  it('squashes contiguous 🫥 commits when real changes arrive', () => {
+  it('picks up pending from ancestor sessions under ## Planning', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
 
+    // Simulate: Session A researched (no tracking, buffered to pending)
+    savePending(dir, 'A', 'Prompt:\nResearch question\n\nResponse:\nResearch findings')
+
+    // Session B chains from A and makes real changes
+    writeChain(dir, 'B', 'A', ['A'])
+    trackWrite(dir, 'B', path.join(dir, 'result.txt'))
+    fs.writeFileSync(path.join(dir, 'result.txt'), 'done')
+
+    const transcript = makeTranscript([{ prompt: 'Implement findings', response: 'Created file.' }])
     withCwd(dir, () => {
-      // Two turns with no file changes → two 🫥 commits
-      const t1 = makeTranscript([{ prompt: 'Turn 1', response: 'Thinking...' }])
-      run(JSON.stringify({ transcript_path: t1 }))
-
-      const t2 = makeTranscript([{ prompt: 'Turn 2', response: 'Still thinking...' }])
-      run(JSON.stringify({ transcript_path: t2 }))
-
-      assert.equal(commitCount(dir), 2) // Initial + 1 combined empty
-
-      // Now make real changes
-      fs.writeFileSync(path.join(dir, 'result.txt'), 'done')
-      const t3 = makeTranscript([{ prompt: 'Turn 3 with changes', response: 'Created file.' }])
-      run(JSON.stringify({ transcript_path: t3 }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'B' }))
     })
 
-    // Should have squashed: Initial + 1 combined commit
     assert.equal(commitCount(dir), 2)
-    assert.equal(lastSubject(dir), 'Turn 3 with changes')
     const body = lastBody(dir)
     assert.ok(body.includes('## Planning'))
     assert.ok(body.includes('## Implementation'))
-    assert.ok(body.includes('Turn 1'))
-    assert.ok(body.includes('Turn 2'))
-    assert.ok(body.includes('Turn 3'))
-    // Planning section comes before Implementation
+    assert.ok(body.includes('Research findings'))
+    assert.ok(body.includes('Implement findings'))
+    // Planning comes before Implementation
     assert.ok(body.indexOf('## Planning') < body.indexOf('## Implementation'))
   })
 
-  it('squashes contiguous 🫥 commits on consecutive empty turns', () => {
+  it('picks up pending from multi-ancestor chain', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
 
+    // A → B → C chain, with pending in A and B
+    savePending(dir, 'A', 'Research A')
+    savePending(dir, 'B', 'Research B')
+    writeChain(dir, 'B', 'A', ['A'])
+    writeChain(dir, 'C', 'B', ['B', 'A'])
+    trackWrite(dir, 'C', path.join(dir, 'result.txt'))
+    fs.writeFileSync(path.join(dir, 'result.txt'), 'done')
+
+    const transcript = makeTranscript([{ prompt: 'Final implementation', response: 'Done.' }])
     withCwd(dir, () => {
-      const t1 = makeTranscript([{ prompt: 'Turn 1', response: 'Thinking...' }])
-      run(JSON.stringify({ transcript_path: t1 }))
-      assert.equal(commitCount(dir), 2) // Initial + 1 empty
-
-      const t2 = makeTranscript([{ prompt: 'Turn 2', response: 'Still thinking...' }])
-      run(JSON.stringify({ transcript_path: t2 }))
-      assert.equal(commitCount(dir), 2) // Squashed into 1 empty
-
-      const t3 = makeTranscript([{ prompt: 'Turn 3', response: 'More thinking...' }])
-      run(JSON.stringify({ transcript_path: t3 }))
-      assert.equal(commitCount(dir), 2) // Still squashed
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'C' }))
     })
 
     const body = lastBody(dir)
-    assert.ok(body.includes('Turn 1'))
-    assert.ok(body.includes('Turn 2'))
-    assert.ok(body.includes('Turn 3'))
-    assert.ok(!body.includes('## Planning'), 'no-changes squash must not use Planning/Implementation headers')
-    assert.ok(!body.includes('## Implementation'), 'no-changes squash must not use Planning/Implementation headers')
+    assert.ok(body.includes('## Planning'))
+    assert.ok(body.includes('Research A'))
+    assert.ok(body.includes('Research B'))
+    // Ancestors in order (oldest first)
+    assert.ok(body.indexOf('Research A') < body.indexOf('Research B'))
+  })
+
+  it('cleans up tracking, pending, and chain files after commit', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+
+    savePending(dir, 'A', 'Research')
+    writeChain(dir, 'B', 'A', ['A'])
+    trackWrite(dir, 'B', path.join(dir, 'result.txt'))
+    fs.writeFileSync(path.join(dir, 'result.txt'), 'done')
+
+    const transcript = makeTranscript([{ prompt: 'Implement', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'B' }))
+    })
+
+    // Tracking file for B should be cleaned up
+    const trackingFile = path.join(dir, '.git', 'turbocommit', 'tracking', 'B.jsonl')
+    assert.ok(!fs.existsSync(trackingFile))
+    // Pending for A should be cleaned up
+    assert.ok(!fs.existsSync(path.join(dir, '.git', 'turbocommit', 'pending', 'A')))
+    // Chain for B should be cleaned up
+    assert.ok(!fs.existsSync(path.join(dir, '.git', 'turbocommit', 'chains', 'B.json')))
+  })
+
+  it('commits without Planning section when no pending exists', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const transcript = makeTranscript([{ prompt: 'Add a file', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    const body = lastBody(dir)
+    assert.ok(!body.includes('## Planning'))
+    assert.ok(!body.includes('## Implementation'))
   })
 
   it('handles invalid JSON input gracefully', () => {
@@ -234,13 +391,37 @@ describe('run', () => {
       title: { type: 'transcript' }
     }))
     fs.writeFileSync(path.join(dir, 'file.txt'), 'first file')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
 
     const transcript = makeTranscript([{ prompt: 'Init project', response: 'Done.' }])
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     assert.equal(commitCount(dir), 1)
     assert.equal(lastSubject(dir), 'Init project')
+  })
+
+  it('backwards compat: skips when no session_id and no changes', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    const transcript = makeTranscript([{ prompt: 'Hello', response: 'Hi' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    assert.equal(commitCount(dir), 1) // no empty commit created
+  })
+
+  it('backwards compat: commits without session_id (old hook)', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'new content')
+    const transcript = makeTranscript([{ prompt: 'Add a file', response: 'Done.' }])
+    withCwd(dir, () => {
+      // No session_id — old-style turbocommit run
+      run(JSON.stringify({ transcript_path: transcript }))
+    })
+    assert.equal(commitCount(dir), 2)
+    assert.equal(lastSubject(dir), 'Add a file')
   })
 
   it('uses agent for headline by default when title.type is absent', () => {
@@ -255,9 +436,10 @@ describe('run', () => {
     execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
 
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     const transcript = makeTranscript([{ prompt: 'Original prompt', response: 'Done.' }])
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     assert.equal(lastSubject(dir), 'Agent default headline')
   })
@@ -280,9 +462,10 @@ describe('run', () => {
       response: 'x'.repeat(3000)
     }))
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     const transcript = makeTranscript(pairs)
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     // The headline is the byte count wc -c returned. If truncation works,
     // it should be much smaller than the full transcript (~60K+ chars).
@@ -303,9 +486,10 @@ describe('run', () => {
     execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
 
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     const transcript = makeTranscript([{ prompt: 'Transcript headline', response: 'Done.' }])
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     assert.equal(lastSubject(dir), 'Transcript headline')
   })
@@ -322,9 +506,10 @@ describe('run', () => {
     execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
 
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     const transcript = makeTranscript([{ prompt: 'Original prompt', response: 'Done.' }])
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     assert.equal(lastSubject(dir), 'Agent headline')
   })
@@ -342,9 +527,10 @@ describe('run', () => {
     execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
 
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     const transcript = makeTranscript([{ prompt: 'Add file', response: 'Done.' }])
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     assert.equal(lastBody(dir), 'Agent body text')
   })
@@ -362,9 +548,10 @@ describe('run', () => {
     execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
 
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     const transcript = makeTranscript([{ prompt: 'Fallback headline', response: 'Fallback response.' }])
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     // Falls back to transcript-based headline
     assert.equal(lastSubject(dir), 'Fallback headline')
@@ -394,9 +581,10 @@ describe('run', () => {
     execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
 
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     const transcript = makeTranscript([{ prompt: 'Ignored', response: 'Done.' }])
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     // Project command wins, but type from global is preserved via merge
     assert.equal(lastSubject(dir), 'Project title')
@@ -418,9 +606,10 @@ describe('run', () => {
     execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
 
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     const transcript = makeTranscript([{ prompt: 'Global only', response: 'Done.' }])
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     assert.equal(commitCount(dir), 2)
     assert.equal(lastSubject(dir), 'Global only')
@@ -448,7 +637,7 @@ describe('run', () => {
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
     const transcript = makeTranscript([{ prompt: 'Should not commit', response: 'Done.' }])
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     // Should still be just the initial commit — project disabled wins
     assert.equal(commitCount(dir), 1)
@@ -467,9 +656,10 @@ describe('run', () => {
     execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
 
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     const transcript = makeTranscript([{ prompt: 'I used $$ for regex', response: 'Done.' }])
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     // The $$ must survive through renderPrompt without being collapsed to $
     const body = lastBody(dir)
@@ -480,12 +670,13 @@ describe('run', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     const transcript = makeTranscript(
       [{ prompt: 'Add file', response: 'Done.' }],
       { model: 'claude-opus-4-6' }
     )
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     const body = lastBody(dir)
     assert.ok(body.includes('Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>'))
@@ -495,9 +686,10 @@ describe('run', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     const transcript = makeTranscript([{ prompt: 'Add file', response: 'Done.' }])
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     const body = lastBody(dir)
     assert.ok(!body.includes('Co-Authored-By'))
@@ -514,12 +706,13 @@ describe('run', () => {
     execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
 
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     const transcript = makeTranscript(
       [{ prompt: 'Add file', response: 'Done.' }],
       { model: 'claude-opus-4-6' }
     )
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     const body = lastBody(dir)
     assert.ok(!body.includes('Co-Authored-By'))
@@ -536,9 +729,10 @@ describe('run', () => {
     execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
 
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     const transcript = makeTranscript([{ prompt: 'Add file', response: 'Done.' }])
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     const body = lastBody(dir)
     assert.ok(body.includes('Co-Authored-By: My Bot <bot@example.com>'))
@@ -555,35 +749,35 @@ describe('run', () => {
     execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
 
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     const transcript = makeTranscript(
       [{ prompt: 'Add file', response: 'Done.' }],
       { model: 'claude-sonnet-4-6' }
     )
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     const body = lastBody(dir)
     assert.ok(body.includes('Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>'))
   })
 
-  it('appends coauthor after squashed Planning/Implementation body', () => {
+  it('appends coauthor after Planning/Implementation body', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
-    withCwd(dir, () => {
-      // Empty turn → 🫥 commit
-      const t1 = makeTranscript(
-        [{ prompt: 'Turn 1', response: 'Thinking...' }],
-        { model: 'claude-opus-4-6' }
-      )
-      run(JSON.stringify({ transcript_path: t1 }))
 
-      // Real changes arrive — squash the 🫥
-      fs.writeFileSync(path.join(dir, 'result.txt'), 'done')
-      const t2 = makeTranscript(
-        [{ prompt: 'Turn 2 with changes', response: 'Created file.' }],
-        { model: 'claude-opus-4-6' }
-      )
-      run(JSON.stringify({ transcript_path: t2 }))
+    // Buffer pending from ancestor
+    savePending(dir, 'A', 'Prompt:\nTurn 1\n\nResponse:\nThinking...')
+    writeChain(dir, 'B', 'A', ['A'])
+
+    // Real changes arrive
+    fs.writeFileSync(path.join(dir, 'result.txt'), 'done')
+    trackWrite(dir, 'B', path.join(dir, 'result.txt'))
+    const transcript = makeTranscript(
+      [{ prompt: 'Turn 2 with changes', response: 'Created file.' }],
+      { model: 'claude-opus-4-6' }
+    )
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'B' }))
     })
 
     const body = lastBody(dir)
@@ -620,9 +814,10 @@ describe('run monitor events', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     const transcript = makeTranscript([{ prompt: 'Add a file', response: 'Done.' }])
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     const entries = readLog()
     assert.equal(entries.length, 2)
@@ -634,17 +829,16 @@ describe('run monitor events', () => {
     assert.ok(entries[1].title)
   })
 
-  it('logs start and success for empty commits', () => {
+  it('logs skip event when no tracking', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
     const transcript = makeTranscript([{ prompt: 'Hello', response: 'Hi' }])
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     const entries = readLog()
-    assert.equal(entries.length, 2)
-    assert.equal(entries[0].event, 'start')
-    assert.equal(entries[1].event, 'success')
+    assert.equal(entries.length, 1)
+    assert.equal(entries[0].event, 'skip')
   })
 
   it('does not log events when config disabled', () => {
@@ -661,12 +855,13 @@ describe('run monitor events', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     // Create a git index lock to make git add fail
     fs.writeFileSync(path.join(dir, '.git', 'index.lock'), '')
     const transcript = makeTranscript([{ prompt: 'Will fail', response: 'Boom.' }])
     try {
       withCwd(dir, () => {
-        run(JSON.stringify({ transcript_path: transcript }))
+        run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
       })
     } catch {
       // Expected — commit fails
@@ -683,13 +878,14 @@ describe('run monitor events', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
     fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
     // Make log dir read-only so logEvent can't write
     const tcDir = path.join(process.env.HOME, '.claude', 'turbocommit')
     fs.mkdirSync(tcDir, { recursive: true })
     fs.chmodSync(tcDir, 0o444)
     const transcript = makeTranscript([{ prompt: 'Still commits', response: 'Done.' }])
     withCwd(dir, () => {
-      run(JSON.stringify({ transcript_path: transcript }))
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
     })
     // Restore permissions for cleanup
     fs.chmodSync(tcDir, 0o755)

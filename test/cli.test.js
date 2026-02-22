@@ -58,4 +58,29 @@ describe('cli', () => {
     assert.equal(result.exitCode, 1)
     assert.ok(result.stderr.includes('Unknown command'))
   })
+
+  it('run command outputs block JSON for outdated hooks', () => {
+    const result = cli('run', { input: '{}' })
+    assert.equal(result.exitCode, 0)
+    const output = JSON.parse(result.stdout)
+    assert.equal(output.decision, 'block')
+    assert.ok(output.reason.includes('outdated'))
+    assert.ok(output.reason.includes('turbocommit install'))
+  })
+
+  it('run command exits cleanly when stop_hook_active is true', () => {
+    const result = cli('run', { input: JSON.stringify({ stop_hook_active: true }) })
+    assert.equal(result.exitCode, 0)
+    assert.equal(result.stdout, '')
+  })
+
+  it('hook subcommand with unknown event does not crash', () => {
+    const result = cli('hook unknown', { input: '{}' })
+    assert.equal(result.exitCode, 0)
+  })
+
+  it('help text mentions hook command', () => {
+    const result = cli('help')
+    assert.ok(result.stdout.includes('hook'))
+  })
 })

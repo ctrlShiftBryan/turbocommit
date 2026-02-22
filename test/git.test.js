@@ -5,8 +5,7 @@ const path = require('path')
 const os = require('os')
 const { execSync } = require('child_process')
 const {
-  gitRoot, hasChanges, countEmptyMarkers, collectBodies,
-  commitEmpty, addAndCommit, softReset, hasCommits, currentBranch
+  gitRoot, hasChanges, addAndCommit, hasCommits, currentBranch
 } = require('../lib/git')
 
 function makeRepo () {
@@ -69,15 +68,6 @@ describe('hasCommits', () => {
   })
 })
 
-describe('commitEmpty', () => {
-  it('creates an empty commit with 🫥 marker', () => {
-    const dir = makeRepoWithCommit()
-    commitEmpty(dir, 'test headline', 'test body')
-    const subject = execSync('git log --format=%s -1', { cwd: dir, encoding: 'utf8' }).trim()
-    assert.equal(subject, 'test headline 🫥')
-  })
-})
-
 describe('addAndCommit', () => {
   it('commits file changes', () => {
     const dir = makeRepoWithCommit()
@@ -88,54 +78,6 @@ describe('addAndCommit', () => {
     // Verify the file is committed
     const status = execSync('git status --porcelain', { cwd: dir, encoding: 'utf8' }).trim()
     assert.equal(status, '')
-  })
-})
-
-describe('countEmptyMarkers', () => {
-  it('returns 0 for no marker commits', () => {
-    const dir = makeRepoWithCommit()
-    assert.equal(countEmptyMarkers(dir), 0)
-  })
-
-  it('counts contiguous 🫥 commits', () => {
-    const dir = makeRepoWithCommit()
-    commitEmpty(dir, 'first', 'body 1')
-    commitEmpty(dir, 'second', 'body 2')
-    assert.equal(countEmptyMarkers(dir), 2)
-  })
-
-  it('stops at non-marker commit', () => {
-    const dir = makeRepoWithCommit()
-    commitEmpty(dir, 'empty', 'body')
-    // Add a real commit
-    fs.writeFileSync(path.join(dir, 'file.txt'), 'data')
-    addAndCommit(dir, 'real commit', 'real body')
-    // Add another marker
-    commitEmpty(dir, 'after', 'body')
-    assert.equal(countEmptyMarkers(dir), 1)
-  })
-})
-
-describe('collectBodies', () => {
-  it('collects bodies oldest first', () => {
-    const dir = makeRepoWithCommit()
-    commitEmpty(dir, 'first', 'body-1')
-    commitEmpty(dir, 'second', 'body-2')
-    const bodies = collectBodies(dir, 2)
-    assert.equal(bodies.length, 2)
-    assert.equal(bodies[0], 'body-1')
-    assert.equal(bodies[1], 'body-2')
-  })
-})
-
-describe('softReset', () => {
-  it('resets N commits keeping working tree', () => {
-    const dir = makeRepoWithCommit()
-    commitEmpty(dir, 'extra', 'body')
-    const countBefore = execSync('git rev-list --count HEAD', { cwd: dir, encoding: 'utf8' }).trim()
-    softReset(dir, 1)
-    const countAfter = execSync('git rev-list --count HEAD', { cwd: dir, encoding: 'utf8' }).trim()
-    assert.equal(Number(countBefore) - Number(countAfter), 1)
   })
 })
 

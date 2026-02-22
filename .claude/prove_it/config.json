@@ -1,0 +1,67 @@
+{
+  "enabled": true,
+  "sources": [
+    "cli.js",
+    "lib/**/*.js",
+    "test/**/*.js"
+  ],
+  "hooks": [
+    {
+      "type": "claude",
+      "event": "PreToolUse",
+      "matcher": "Edit|Write|NotebookEdit|Bash",
+      "tasks": [
+        {
+          "name": "lock-config",
+          "type": "script",
+          "command": "prove_it run_builtin config:lock"
+        }
+      ]
+    },
+    {
+      "type": "claude",
+      "event": "Stop",
+      "tasks": [
+        {
+          "name": "fast-tests",
+          "type": "script",
+          "command": "./script/test_fast"
+        },
+        {
+          "name": "code-quality-review",
+          "type": "agent",
+          "promptType": "reference",
+          "prompt": "review:code_quality",
+          "model": "haiku",
+          "ruleFile": ".claude/rules/testing.md",
+          "when": {
+            "linesWritten": 733
+          }
+        },
+        {
+          "name": "coverage-review",
+          "type": "agent",
+          "promptType": "reference",
+          "prompt": "review:test_coverage",
+          "model": "haiku",
+          "ruleFile": ".claude/rules/testing.md",
+          "when": {
+            "linesChanged": 541
+          }
+        }
+      ]
+    },
+    {
+      "type": "git",
+      "event": "pre-commit",
+      "tasks": [
+        {
+          "name": "full-tests",
+          "type": "script",
+          "command": "./script/test"
+        }
+      ]
+    }
+  ],
+  "initSeed": "2950baf258c9"
+}

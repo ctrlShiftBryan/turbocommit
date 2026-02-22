@@ -4,6 +4,7 @@ const fs = require('fs')
 const path = require('path')
 const os = require('os')
 const { execSync, spawnSync } = require('child_process')
+const { HOOK_DEFS } = require('../lib/install')
 
 function hasClaude () {
   const r = spawnSync('which claude', { shell: true, encoding: 'utf8' })
@@ -31,14 +32,8 @@ function makeProject (opts = {}) {
   const hookLog = path.join(dir, 'hook-fired.txt')
   const diagHook = { type: 'command', command: `bash -c 'echo fired >> "${hookLog}"'` }
 
-  // Hook settings
-  const settings = opts.settings || {
-    hooks: {
-      Stop: [
-        { hooks: [diagHook, { type: 'command', command: 'turbocommit run' }] }
-      ]
-    }
-  }
+  // Build full hook settings with all 4 turbocommit events + diagnostic hook
+  const settings = opts.settings || buildSettings(diagHook)
   fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify(settings, null, 2))
 
   // Seed file + initial commit
@@ -46,6 +41,19 @@ function makeProject (opts = {}) {
   execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
 
   return { dir, hookLog }
+}
+
+function buildSettings (extraStopHook) {
+  const hooks = {}
+  for (const [event, def] of Object.entries(HOOK_DEFS)) {
+    const group = { hooks: [...def.hooks] }
+    if (def.matcher) group.matcher = def.matcher
+    if (event === 'Stop' && extraStopHook) {
+      group.hooks.unshift(extraStopHook)
+    }
+    hooks[event] = [group]
+  }
+  return { hooks }
 }
 
 function commitCount (dir) {
@@ -79,11 +87,12 @@ function runClaude (dir, prompt) {
 }
 
 describe('integration', { skip: SKIP }, () => {
-  it('turbocommit commits on stop', () => {
+  it('turbocommit commits on stop when agent writes files', () => {
     const { dir, hookLog } = makeProject()
     const before = commitCount(dir)
 
-    runClaude(dir, 'Say hello')
+    // Ask Claude to write a file — this triggers PreToolUse tracking + Stop commit
+    runClaude(dir, 'Create a file called hello.txt containing "hello world". Use the Write tool.')
 
     const hookFired = fs.existsSync(hookLog)
     const after = commitCount(dir)
@@ -93,9 +102,8 @@ describe('integration', { skip: SKIP }, () => {
 
   it('turbocommit appends co-authored-by trailer', () => {
     const { dir } = makeProject()
-    fs.writeFileSync(path.join(dir, 'file.txt'), 'new content')
 
-    runClaude(dir, 'Say hello')
+    runClaude(dir, 'Create a file called test.txt containing "test". Use the Write tool.')
 
     const after = commitCount(dir)
     assert.ok(after > 1, `expected turbocommit commit, got ${after} commits`)
@@ -103,36 +111,15 @@ describe('integration', { skip: SKIP }, () => {
     assert.ok(body.includes('Co-Authored-By:'), `expected Co-Authored-By trailer in commit body, got:\n${body.slice(-200)}`)
   })
 
-  it('turbocommit does not commit when earlier group blocks', () => {
+  it('turbocommit skips commit for read-only sessions', () => {
     const { dir } = makeProject()
-    const hookLog = path.join(dir, 'hook-fired.txt')
-    // Overwrite settings with blocking hook in first group
-    fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), JSON.stringify({
-      hooks: {
-        Stop: [
-          {
-            hooks: [{
-              type: 'command',
-              command: 'bash -c \'INPUT=$(cat); ACTIVE=$(echo "$INPUT" | jq -r .stop_hook_active); if [ "$ACTIVE" = "true" ]; then exit 0; else echo "Keep going" >&2; exit 2; fi\''
-            }]
-          },
-          {
-            hooks: [
-              { type: 'command', command: `bash -c 'echo fired >> "${hookLog}"'` },
-              { type: 'command', command: 'turbocommit run' }
-            ]
-          }
-        ]
-      }
-    }, null, 2))
-
     const before = commitCount(dir)
 
-    runClaude(dir, 'Say hello')
+    // Ask Claude something that doesn't require writing files
+    runClaude(dir, 'What is 2+2? Answer briefly.')
 
     const after = commitCount(dir)
-    assert.ok(after > before, `expected at least one turbocommit commit, got ${before} -> ${after}`)
-    const lastMsg = execSync('git log --format=%s -1', { cwd: dir, encoding: 'utf8' }).trim()
-    assert.ok(lastMsg.length > 0, 'last commit should have a message from turbocommit')
+    // Should NOT create a new commit — no tool modifications tracked
+    assert.equal(after, before, `expected no new commit for read-only session, got ${before} -> ${after}`)
   })
 })

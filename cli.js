@@ -4,8 +4,11 @@ const { readStdin } = require('./lib/io')
 const { install, uninstall } = require('./lib/install')
 const { init, deinit } = require('./lib/init')
 const { run } = require('./lib/run')
+const { handleTrack } = require('./lib/track')
+const { handleSessionStart, handleSessionEnd } = require('./lib/session')
 const { doctor } = require('./lib/doctor')
 const { monitor } = require('./lib/monitor')
+const { gitRoot } = require('./lib/git')
 
 const VERSION = require('./package.json').version
 
@@ -13,22 +16,21 @@ const USAGE = `turbocommit v${VERSION}
 Auto-commit after every Claude Code turn.
 
 Commands:
-  install     Add turbocommit Stop hook to ~/.claude/settings.json
+  install     Add turbocommit hooks to ~/.claude/settings.json
   uninstall   Remove turbocommit from settings
   init        Create .claude/turbocommit.json in current git repo
   deinit      Remove .claude/turbocommit.json
   doctor      Check hook and config health
   monitor     Tail the event log (start/success/fail)
-  run         Hook entry point (reads stdin, auto-commits)
+  hook        Hook entry points (called by Claude Code, not manually)
   help        Show this help text
   --version, -v  Show version
 
 Usage:
-  turbocommit install     # set up the global hook
+  turbocommit install     # set up the global hooks
   turbocommit init        # enable in a project
   turbocommit doctor      # verify everything is wired correctly
   turbocommit monitor     # watch commits in real-time
-  turbocommit run         # called by Claude Code (not manually)
 `
 
 function main (argv) {
@@ -47,8 +49,10 @@ function main (argv) {
       return cmdInit()
     case 'deinit':
       return cmdDeinit()
+    case 'hook':
+      return cmdHook(argv.slice(1))
     case 'run':
-      return cmdRun()
+      return cmdRunDeprecated()
     case '--version':
     case '-v':
     case 'version':
@@ -78,7 +82,7 @@ function cmdInstall () {
   console.log(`  Settings: ${result.settingsPath}`)
   console.log('')
   console.log('════════════════════════════════════════════════════════════════════')
-  console.log('IMPORTANT: Restart Claude Code for the hook to take effect.')
+  console.log('IMPORTANT: Restart Claude Code for the hooks to take effect.')
   console.log('════════════════════════════════════════════════════════════════════')
   console.log('')
   console.log('Next steps:')
@@ -142,13 +146,48 @@ function cmdMonitor () {
   monitor()
 }
 
-function cmdRun () {
+function cmdHook (argv) {
+  const event = argv[0]
   try {
     const input = readStdin()
-    run(input)
+    const root = gitRoot()
+    switch (event) {
+      case 'pre-tool-use':
+        handleTrack(input, root)
+        return
+      case 'session-start':
+        handleSessionStart(input, root)
+        return
+      case 'session-end':
+        handleSessionEnd(input, root)
+        return
+      case 'stop':
+        run(input)
+        break
+      default:
+        // Unknown hook event — ignore silently (never fail)
+        break
+    }
   } catch {
     // Never fail — fire and forget
   }
+}
+
+function cmdRunDeprecated () {
+  let hookInput
+  try {
+    hookInput = JSON.parse(readStdin())
+  } catch {
+    hookInput = {}
+  }
+  // Prevent infinite loop: if we already blocked once, let Claude stop
+  if (hookInput.stop_hook_active) return
+  const msg = 'turbocommit hooks are outdated (v0.6). ' +
+    'Auto-commits are paused until you upgrade. ' +
+    'Run: turbocommit install'
+  // Block the stop so the agent sees the reason and can relay it to the user
+  const output = JSON.stringify({ decision: 'block', reason: msg })
+  process.stdout.write(output + '\n')
 }
 
 main(process.argv.slice(2))
