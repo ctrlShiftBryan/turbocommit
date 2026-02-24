@@ -6,7 +6,7 @@ const os = require('os')
 const { execSync } = require('child_process')
 const { run, formatModelName, resolveCoauthor } = require('../lib/run')
 const { handleTrack } = require('../lib/track')
-const { savePending, chainDir } = require('../lib/session')
+const { savePending, chainDir, saveWatermark, readWatermark } = require('../lib/session')
 const { ensureDir } = require('../lib/io')
 
 function makeRepo () {
@@ -340,7 +340,7 @@ describe('run', () => {
     assert.ok(body.indexOf('Research A') < body.indexOf('Research B'))
   })
 
-  it('cleans up tracking, pending, and chain files after commit', () => {
+  it('cleans up tracking and pending but preserves chain files after commit', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
 
@@ -359,8 +359,8 @@ describe('run', () => {
     assert.ok(!fs.existsSync(trackingFile))
     // Pending for A should be cleaned up
     assert.ok(!fs.existsSync(path.join(dir, '.git', 'turbocommit', 'pending', 'A')))
-    // Chain for B should be cleaned up
-    assert.ok(!fs.existsSync(path.join(dir, '.git', 'turbocommit', 'chains', 'B.json')))
+    // Chain for B should survive (needed for resolveParentCommit)
+    assert.ok(fs.existsSync(path.join(dir, '.git', 'turbocommit', 'chains', 'B.json')))
   })
 
   it('commits without Planning section when no pending exists', () => {
@@ -759,6 +759,246 @@ describe('run', () => {
     })
     const body = lastBody(dir)
     assert.ok(body.includes('Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>'))
+  })
+
+  it('creates watermark file after commit', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const transcript = makeTranscript([{ prompt: 'Add file', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    const wm = readWatermark(dir, 'S1')
+    assert.ok(wm, 'watermark should exist after commit')
+    assert.equal(wm.pairs, 1)
+    assert.match(wm.commit, /^[0-9a-f]{40}$/)
+    // Commit SHA should match HEAD
+    const head = execSync('git rev-parse HEAD', { cwd: dir, encoding: 'utf8' }).trim()
+    assert.equal(wm.commit, head)
+  })
+
+  it('no continuation reference on first commit', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const transcript = makeTranscript([{ prompt: 'First commit', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    const body = lastBody(dir)
+    assert.ok(!body.includes('Continuation of'))
+  })
+
+  it('watermark slicing: second commit excludes first content', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+
+    // First commit: 2 pairs
+    fs.writeFileSync(path.join(dir, 'file1.txt'), 'v1')
+    trackWrite(dir, 'S1', path.join(dir, 'file1.txt'))
+    const transcript1 = makeTranscript([
+      { prompt: 'Turn 1', response: 'First response.' },
+      { prompt: 'Turn 2', response: 'Second response.' }
+    ])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript1, session_id: 'S1' }))
+    })
+    const body1 = lastBody(dir)
+    assert.ok(body1.includes('Turn 1'))
+    assert.ok(body1.includes('Turn 2'))
+
+    // Second commit in same session: 3 pairs total (2 old + 1 new)
+    fs.writeFileSync(path.join(dir, 'file2.txt'), 'v2')
+    trackWrite(dir, 'S1', path.join(dir, 'file2.txt'))
+    const transcript2 = makeTranscript([
+      { prompt: 'Turn 1', response: 'First response.' },
+      { prompt: 'Turn 2', response: 'Second response.' },
+      { prompt: 'Turn 3', response: 'Third response.' }
+    ])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript2, session_id: 'S1' }))
+    })
+    const body2 = lastBody(dir)
+    // Second commit should only have Turn 3, not Turn 1 or Turn 2
+    assert.ok(body2.includes('Turn 3'), 'new content should be present')
+    assert.ok(!body2.includes('Turn 1'), 'old content should be excluded')
+    assert.ok(!body2.includes('Turn 2'), 'old content should be excluded')
+  })
+
+  it('continuation reference on second commit in same session', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+
+    // First commit
+    fs.writeFileSync(path.join(dir, 'file1.txt'), 'v1')
+    trackWrite(dir, 'S1', path.join(dir, 'file1.txt'))
+    const transcript1 = makeTranscript([{ prompt: 'First', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript1, session_id: 'S1' }))
+    })
+    const firstSha = execSync('git rev-parse HEAD', { cwd: dir, encoding: 'utf8' }).trim()
+
+    // Second commit
+    fs.writeFileSync(path.join(dir, 'file2.txt'), 'v2')
+    trackWrite(dir, 'S1', path.join(dir, 'file2.txt'))
+    const transcript2 = makeTranscript([
+      { prompt: 'First', response: 'Done.' },
+      { prompt: 'Second', response: 'Done again.' }
+    ])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript2, session_id: 'S1' }))
+    })
+    const body2 = lastBody(dir)
+    assert.ok(body2.startsWith(`Continuation of ${firstSha.slice(0, 7)}`))
+  })
+
+  it('cross-session continuation via chain', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+
+    // Session A commits
+    fs.writeFileSync(path.join(dir, 'file1.txt'), 'v1')
+    trackWrite(dir, 'A', path.join(dir, 'file1.txt'))
+    const transcriptA = makeTranscript([{ prompt: 'First', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcriptA, session_id: 'A' }))
+    })
+    const firstSha = execSync('git rev-parse HEAD', { cwd: dir, encoding: 'utf8' }).trim()
+
+    // Session B chains from A and commits
+    writeChain(dir, 'B', 'A', ['A'])
+    fs.writeFileSync(path.join(dir, 'file2.txt'), 'v2')
+    trackWrite(dir, 'B', path.join(dir, 'file2.txt'))
+    const transcriptB = makeTranscript([{ prompt: 'Second', response: 'Done again.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcriptB, session_id: 'B' }))
+    })
+    const body = lastBody(dir)
+    assert.ok(body.startsWith(`Continuation of ${firstSha.slice(0, 7)}`))
+  })
+
+  it('mid-lineage pending + continuation combined', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+
+    // Session A commits (watermark saved)
+    fs.writeFileSync(path.join(dir, 'file1.txt'), 'v1')
+    trackWrite(dir, 'A', path.join(dir, 'file1.txt'))
+    const transcriptA = makeTranscript([{ prompt: 'Initial work', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcriptA, session_id: 'A' }))
+    })
+    const commitSha = execSync('git rev-parse HEAD', { cwd: dir, encoding: 'utf8' }).trim()
+
+    // Session B: read-only planning (pending saved)
+    savePending(dir, 'B', 'Prompt:\nPlanning question\n\nResponse:\nPlanning answer')
+    writeChain(dir, 'B', 'A', ['A'])
+
+    // Session C: read-only planning (pending saved)
+    savePending(dir, 'C', 'Prompt:\nMore planning\n\nResponse:\nMore answers')
+    writeChain(dir, 'C', 'B', ['B', 'A'])
+
+    // Session D: actual implementation, chains from C
+    writeChain(dir, 'D', 'C', ['C', 'B', 'A'])
+    fs.writeFileSync(path.join(dir, 'file2.txt'), 'implemented')
+    trackWrite(dir, 'D', path.join(dir, 'file2.txt'))
+    const transcriptD = makeTranscript([{ prompt: 'Implement it', response: 'Created.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcriptD, session_id: 'D' }))
+    })
+
+    const body = lastBody(dir)
+    // Should have continuation ref from A's commit
+    assert.ok(body.startsWith(`Continuation of ${commitSha.slice(0, 7)}`))
+    // Should have Planning section with B and C's pending
+    assert.ok(body.includes('## Planning'))
+    assert.ok(body.includes('Planning question'))
+    assert.ok(body.includes('More planning'))
+    // Should have Implementation section
+    assert.ok(body.includes('## Implementation'))
+    assert.ok(body.includes('Implement it'))
+    // Planning before Implementation
+    assert.ok(body.indexOf('## Planning') < body.indexOf('## Implementation'))
+  })
+
+  it('skip-between-commits: self-pending not duplicated in Planning', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+
+    // Step 1: S1 commits with 2 pairs → watermark saved at pairs=2
+    fs.writeFileSync(path.join(dir, 'file1.txt'), 'v1')
+    trackWrite(dir, 'S1', path.join(dir, 'file1.txt'))
+    const transcript1 = makeTranscript([
+      { prompt: 'Turn 1', response: 'First.' },
+      { prompt: 'Turn 2', response: 'Second.' }
+    ])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript1, session_id: 'S1' }))
+    })
+
+    // Step 2: S1 fires with no modifications → skip, pending saved
+    // Transcript now has 3 pairs (2 old + 1 new)
+    const transcript2 = makeTranscript([
+      { prompt: 'Turn 1', response: 'First.' },
+      { prompt: 'Turn 2', response: 'Second.' },
+      { prompt: 'Turn 3 planning', response: 'Thinking about it.' }
+    ])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript2, session_id: 'S1' }))
+    })
+
+    // Step 3: S1 commits again with 4 pairs total
+    fs.writeFileSync(path.join(dir, 'file2.txt'), 'v2')
+    trackWrite(dir, 'S1', path.join(dir, 'file2.txt'))
+    const transcript3 = makeTranscript([
+      { prompt: 'Turn 1', response: 'First.' },
+      { prompt: 'Turn 2', response: 'Second.' },
+      { prompt: 'Turn 3 planning', response: 'Thinking about it.' },
+      { prompt: 'Turn 4 implement', response: 'Done.' }
+    ])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript3, session_id: 'S1' }))
+    })
+
+    const body = lastBody(dir)
+    // Self-pending is excluded from collection — effectivePairs already
+    // covers those turns. No Planning section (no ancestor pending).
+    assert.ok(!body.includes('## Planning'), 'no Planning section for same-session skip')
+    assert.ok(!body.includes('## Implementation'), 'no Implementation section without Planning')
+    // Body has Turn 3 and 4 (watermark-sliced) but not Turn 1 or 2
+    assert.ok(body.includes('Turn 3 planning'))
+    assert.ok(body.includes('Turn 4 implement'))
+    assert.ok(!body.includes('Turn 1'), 'already-committed content excluded')
+    assert.ok(!body.includes('Turn 2'), 'already-committed content excluded')
+    // Turn 3 appears exactly once (no duplication)
+    const turn3Count = body.split('Turn 3 planning').length - 1
+    assert.equal(turn3Count, 1, 'Turn 3 should appear only once')
+  })
+
+  it('fallback when watermark exceeds transcript length', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+
+    // Save a watermark claiming 10 pairs were committed
+    saveWatermark(dir, 'S1', 10, 'abc123')
+
+    // But new transcript only has 2 pairs (e.g. transcript was truncated/regenerated)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const transcript = makeTranscript([
+      { prompt: 'Turn 1', response: 'Response 1.' },
+      { prompt: 'Turn 2', response: 'Response 2.' }
+    ])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    const body = lastBody(dir)
+    // Should fall back to full transcript since slice would be empty
+    assert.ok(body.includes('Turn 1'))
+    assert.ok(body.includes('Turn 2'))
   })
 
   it('appends coauthor after Planning/Implementation body', () => {

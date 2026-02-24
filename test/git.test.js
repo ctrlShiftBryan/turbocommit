@@ -79,6 +79,15 @@ describe('addAndCommit', () => {
     const status = execSync('git status --porcelain', { cwd: dir, encoding: 'utf8' }).trim()
     assert.equal(status, '')
   })
+
+  it('returns 40-char hex SHA matching HEAD', () => {
+    const dir = makeRepoWithCommit()
+    fs.writeFileSync(path.join(dir, 'new.txt'), 'content')
+    const sha = addAndCommit(dir, 'test commit', 'body')
+    assert.match(sha, /^[0-9a-f]{40}$/)
+    const head = execSync('git rev-parse HEAD', { cwd: dir, encoding: 'utf8' }).trim()
+    assert.equal(sha, head)
+  })
 })
 
 describe('currentBranch', () => {

@@ -12,9 +12,13 @@ const {
   cleanupConsumed,
   cleanupStale,
   readChain,
+  readWatermark,
+  saveWatermark,
+  resolveParentCommit,
   breadcrumbDir,
   chainDir,
   pendingDir,
+  watermarkDir,
   BREADCRUMB_THRESHOLD_MS
 } = require('../lib/session')
 
@@ -238,7 +242,7 @@ describe('cleanupConsumed', () => {
   let root
   beforeEach(() => { root = tmpRoot() })
 
-  it('deletes pending dir and chain file', () => {
+  it('deletes pending dir but preserves chain files', () => {
     savePending(root, 'A', 'transcript A')
     const cDir = chainDir(root)
     fs.mkdirSync(cDir, { recursive: true })
@@ -248,8 +252,8 @@ describe('cleanupConsumed', () => {
 
     // Pending dir should be gone
     assert.ok(!fs.existsSync(path.join(pendingDir(root), 'A')))
-    // Chain file should be gone
-    assert.ok(!fs.existsSync(path.join(cDir, 'B.json')))
+    // Chain file should survive (needed for resolveParentCommit)
+    assert.ok(fs.existsSync(path.join(cDir, 'B.json')))
   })
 
   it('does not crash on missing files', () => {
@@ -316,5 +320,87 @@ describe('cleanupStale', () => {
     // With a 500ms TTL, the file should be removed
     cleanupStale(root, 500)
     assert.ok(!fs.existsSync(file))
+  })
+
+  it('removes stale watermark files', () => {
+    const wDir = watermarkDir(root)
+    fs.mkdirSync(wDir, { recursive: true })
+    const file = path.join(wDir, 'old-session.json')
+    fs.writeFileSync(file, JSON.stringify({ pairs: 5, commit: 'abc123' }))
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)
+    fs.utimesSync(file, twoDaysAgo, twoDaysAgo)
+
+    cleanupStale(root)
+
+    assert.ok(!fs.existsSync(file))
+  })
+})
+
+describe('readWatermark / saveWatermark', () => {
+  let root
+  beforeEach(() => { root = tmpRoot() })
+
+  it('returns null when no watermark exists', () => {
+    assert.equal(readWatermark(root, 'X'), null)
+  })
+
+  it('saves and reads a watermark', () => {
+    saveWatermark(root, 'S1', 5, 'abc123def456')
+    const wm = readWatermark(root, 'S1')
+    assert.deepEqual(wm, { pairs: 5, commit: 'abc123def456' })
+  })
+
+  it('overwrites watermark on second save', () => {
+    saveWatermark(root, 'S1', 3, 'first')
+    saveWatermark(root, 'S1', 7, 'second')
+    const wm = readWatermark(root, 'S1')
+    assert.equal(wm.pairs, 7)
+    assert.equal(wm.commit, 'second')
+  })
+})
+
+describe('resolveParentCommit', () => {
+  let root
+  beforeEach(() => { root = tmpRoot() })
+
+  it('returns null when no watermark or chain exists', () => {
+    assert.equal(resolveParentCommit(root, 'X'), null)
+  })
+
+  it('returns own watermark commit (same-session)', () => {
+    saveWatermark(root, 'S1', 5, 'own-sha')
+    assert.equal(resolveParentCommit(root, 'S1'), 'own-sha')
+  })
+
+  it('walks chain ancestors when own watermark is absent', () => {
+    // A committed, B chains from A
+    saveWatermark(root, 'A', 3, 'ancestor-sha')
+    const cDir = chainDir(root)
+    fs.mkdirSync(cDir, { recursive: true })
+    fs.writeFileSync(path.join(cDir, 'B.json'), JSON.stringify({ parent: 'A', ancestors: ['A'] }))
+
+    assert.equal(resolveParentCommit(root, 'B'), 'ancestor-sha')
+  })
+
+  it('prefers nearest ancestor watermark', () => {
+    // Chain: C → B → A, both A and B have watermarks
+    saveWatermark(root, 'A', 2, 'old-sha')
+    saveWatermark(root, 'B', 4, 'recent-sha')
+    const cDir = chainDir(root)
+    fs.mkdirSync(cDir, { recursive: true })
+    fs.writeFileSync(path.join(cDir, 'C.json'), JSON.stringify({ parent: 'B', ancestors: ['B', 'A'] }))
+
+    // B is nearer, so its watermark should win
+    assert.equal(resolveParentCommit(root, 'C'), 'recent-sha')
+  })
+
+  it('prefers own watermark over ancestor', () => {
+    saveWatermark(root, 'A', 2, 'ancestor-sha')
+    saveWatermark(root, 'B', 5, 'own-sha')
+    const cDir = chainDir(root)
+    fs.mkdirSync(cDir, { recursive: true })
+    fs.writeFileSync(path.join(cDir, 'B.json'), JSON.stringify({ parent: 'A', ancestors: ['A'] }))
+
+    assert.equal(resolveParentCommit(root, 'B'), 'own-sha')
   })
 })
