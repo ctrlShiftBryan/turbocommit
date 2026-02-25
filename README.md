@@ -71,6 +71,46 @@ anywhere — order doesn't matter since they never block.
 | `turbocommit help` | Show usage |
 | `turbocommit --version` | Show version |
 
+## Continuity across workstreams
+
+Every turbocommit adds a `Continuation of <SHA>` reference linking back to
+the previous commit from the same Claude session. This means you can run
+multiple sessions in parallel — different tabs, different tasks — all
+committing to a single branch, and still trace each logical workstream
+by following the SHA chain.
+
+Here's a real stretch of [`prove_it`](https://github.com/searlsco/prove_it)'s
+`main` branch. Two sessions and a couple manual commits, all interleaved:
+
+1. [`cb20f72`](https://github.com/searlsco/prove_it/commit/cb20f72) 🔵 Fix PROVE_IT_DISABLED leak in integration tests
+2. [`cff5a2e`](https://github.com/searlsco/prove_it/commit/cff5a2e) 🔵 Fix env variable leaks in integration test harness
+3. [`5c3ca43`](https://github.com/searlsco/prove_it/commit/5c3ca43) 🟠 Fix reviewer rationale parsing for multi-line verdicts
+4. [`6f22cee`](https://github.com/searlsco/prove_it/commit/6f22cee) 🟠 Remove dead cached output filter and JSDoc
+5. [`efca526`](https://github.com/searlsco/prove_it/commit/efca526) v0.44.0
+6. [`1561c46`](https://github.com/searlsco/prove_it/commit/1561c46) update conifg
+7. [`de771db`](https://github.com/searlsco/prove_it/commit/de771db) 🟠 Fix init to preserve custom sources during config upgrade
+8. [`538fc72`](https://github.com/searlsco/prove_it/commit/538fc72) 🟠 Fix signal command to fail honestly outside hook context
+
+Each linked commit's description starts with the reference back:
+
+```
+Fix signal command to fail honestly outside hook context
+
+Continuation of de771db
+
+Prompt:
+...
+```
+
+So after the fact, you can reconstruct each session's lineage:
+
+**🟠 Session A:** [`5c3ca43`](https://github.com/searlsco/prove_it/commit/5c3ca43) → [`6f22cee`](https://github.com/searlsco/prove_it/commit/6f22cee) → [`de771db`](https://github.com/searlsco/prove_it/commit/de771db) → [`538fc72`](https://github.com/searlsco/prove_it/commit/538fc72)
+
+**🔵 Session B:** [`cb20f72`](https://github.com/searlsco/prove_it/commit/cb20f72) → [`cff5a2e`](https://github.com/searlsco/prove_it/commit/cff5a2e)
+
+No feature branches. No rebasing. Just a flat history where every thread
+is traceable.
+
 ## Requirements
 
 - Node.js >= 18
