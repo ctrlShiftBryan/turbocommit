@@ -13,7 +13,8 @@
         {
           "name": "session-briefing",
           "type": "script",
-          "command": "prove_it run_builtin session:briefing"
+          "command": "prove_it run_builtin session:briefing",
+          "quiet": true
         }
       ]
     },
@@ -39,16 +40,18 @@
           "type": "script",
           "command": "./script/test_fast",
           "when": {
-            "sourcesModifiedSinceLastRun": true
+            "sourcesModifiedSinceLastRun": true,
+            "sourceFilesEditedThisTurn": true
           }
         },
         {
           "name": "full-tests",
           "type": "script",
           "command": "./script/test",
+          "parallel": true,
           "when": {
             "signal": "done",
-            "sourceFilesEdited": true
+            "sourceFilesEditedThisTurn": true
           }
         },
         {
@@ -66,6 +69,7 @@
         {
           "name": "shipworthy-review",
           "type": "agent",
+          "parallel": true,
           "promptType": "skill",
           "prompt": "prove-shipworthy",
           "model": "opus",
@@ -91,5 +95,5 @@
       ]
     }
   ],
-  "initSeed": "71f80e06c72b"
+  "initSeed": "1768cb7bf5e8"
 }
