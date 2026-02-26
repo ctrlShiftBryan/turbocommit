@@ -111,6 +111,56 @@ So after the fact, you can reconstruct each session's lineage:
 No feature branches. No rebasing. Just a flat history where every thread
 is traceable.
 
+## Configuration
+
+`turbocommit init` creates `.claude/turbocommit.json` with `{"enabled": true}`.
+You can also place a global config at `~/.claude/turbocommit.json` — project
+config is deep-merged on top.
+
+Here's every property with its default:
+
+```jsonc
+{
+  // Required. turbocommit is inert unless this is true.
+  "enabled": true,
+
+  // Co-Authored-By trailer.
+  //   true  → auto-detect model from transcript (default)
+  //   false → no trailer
+  //   "Name <email>" → custom trailer value
+  "coauthor": true,
+
+  "title": {
+    // "agent" (default) → run a title agent to generate the headline
+    // "transcript"      → extract the first prompt as the headline
+    "type": "agent",
+
+    // Command to run for title generation (only when type is "agent").
+    "command": "claude -p --model haiku",
+
+    // Prompt template sent to the title agent. Use {{transcript}} as the
+    // placeholder for the session transcript.
+    "prompt": "You have 10 seconds. Write a single-line git commit headline (max 72 chars) from this coding session transcript. Speed over perfection — a rough title beats no title.\n\nRules:\n- Imperative mood (\"Add\", \"Fix\", \"Update\")\n- Specific about what changed\n- No trailing period\n- No conventional commit prefixes unless clearly a fix/feat\n\nTranscript:\n{{transcript}}\n\nRespond with ONLY the headline, nothing else. Do not deliberate."
+  },
+
+  "body": {
+    // "transcript" (default) → use the formatted prompt/response transcript
+    // "agent"                → run a body agent to summarize
+    "type": "transcript",
+
+    // Command to run for body generation (only when type is "agent").
+    "command": "claude -p --model haiku",
+
+    // Prompt template sent to the body agent. Use {{transcript}} as the
+    // placeholder for the session transcript.
+    "prompt": "Given this transcript of a coding session, write a concise git commit body.\n\nRules:\n- Summarize what was done and why\n- Be concise — a few sentences or bullet points\n- Focus on the \"why\" more than the \"what\"\n\nTranscript:\n{{transcript}}\n\nRespond with ONLY the commit body, nothing else."
+  }
+}
+```
+
+Set `TURBOCOMMIT_DISABLED` to any non-empty value to skip turbocommit at
+runtime without changing config.
+
 ## Requirements
 
 - Node.js >= 18
