@@ -153,7 +153,12 @@ Here's every property with its default:
 
     // Prompt template sent to the body agent. Use {{transcript}} as the
     // placeholder for the session transcript.
-    "prompt": "Given this transcript of a coding session, write a concise git commit body.\n\nRules:\n- Summarize what was done and why\n- Be concise — a few sentences or bullet points\n- Focus on the \"why\" more than the \"what\"\n\nTranscript:\n{{transcript}}\n\nRespond with ONLY the commit body, nothing else."
+    "prompt": "Given this transcript of a coding session, write a concise git commit body.\n\nRules:\n- Summarize what was done and why\n- Be concise — a few sentences or bullet points\n- Focus on the \"why\" more than the \"what\"\n\nTranscript:\n{{transcript}}\n\nRespond with ONLY the commit body, nothing else.",
+
+    // Wrap prose lines at this width. Code blocks, tables, headers, and
+    // other structured content are preserved verbatim.
+    // false/absent → no wrapping (default).
+    "maxLineLength": false
   }
 }
 ```

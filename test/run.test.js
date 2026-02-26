@@ -1059,6 +1059,58 @@ describe('run', () => {
     const implIdx = body.indexOf('## Implementation')
     assert.ok(coauthorIdx > implIdx, 'coauthor trailer should come after Implementation section')
   })
+
+  it('wraps body lines when body.maxLineLength is set', () => {
+    const dir = makeRepo()
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true,
+      title: { type: 'transcript' },
+      coauthor: false,
+      body: { maxLineLength: 40 }
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const longResponse = 'This is a very long response line that definitely exceeds the forty character wrapping limit we configured'
+    const transcript = makeTranscript([{ prompt: 'Do something', response: longResponse }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    const body = lastBody(dir)
+    const lines = body.split('\n')
+    // Prose lines (not headers or blank) should be within limit
+    for (const line of lines) {
+      if (line === '' || /^#{1,6}\s/.test(line)) continue
+      assert.ok(line.length <= 40, `line exceeds limit: "${line}" (${line.length})`)
+    }
+  })
+
+  it('does not wrap body when body.maxLineLength is absent', () => {
+    const dir = makeRepo()
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true,
+      title: { type: 'transcript' },
+      coauthor: false
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const longResponse = 'This is a very long response line that definitely exceeds a typical wrapping limit but should be left alone'
+    const transcript = makeTranscript([{ prompt: 'Do something', response: longResponse }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    const body = lastBody(dir)
+    assert.ok(body.includes(longResponse), 'long line should not be wrapped')
+  })
 })
 
 describe('run monitor events', () => {
