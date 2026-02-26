@@ -116,7 +116,3 @@ is traceable.
 - Node.js >= 18
 - Git
 - Claude Code
-
-## License
-
-MIT
