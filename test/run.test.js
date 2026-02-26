@@ -4,7 +4,7 @@ const fs = require('fs')
 const path = require('path')
 const os = require('os')
 const { execSync } = require('child_process')
-const { run, formatModelName, resolveCoauthor } = require('../lib/run')
+const { run, formatModelName, resolveCoauthor, readClaudeAttribution } = require('../lib/run')
 const { handleTrack } = require('../lib/track')
 const { savePending, chainDir, saveWatermark, readWatermark } = require('../lib/session')
 const { ensureDir } = require('../lib/io')
@@ -761,6 +761,36 @@ describe('run', () => {
     assert.ok(body.includes('Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>'))
   })
 
+  it('uses Claude Code attribution.commit instead of auto-detect when CLAUDECODE=1', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    // Write Claude settings with custom attribution
+    const claudeDir = path.join(process.env.HOME, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify({
+      attribution: { commit: 'Co-Authored-By: Custom Agent <agent@example.com>' }
+    }))
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const transcript = makeTranscript(
+      [{ prompt: 'Add file', response: 'Done.' }],
+      { model: 'claude-opus-4-6' }
+    )
+    process.env.CLAUDECODE = '1'
+    try {
+      withCwd(dir, () => {
+        run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+      })
+      const body = lastBody(dir)
+      assert.ok(body.includes('Co-Authored-By: Custom Agent <agent@example.com>'),
+        'should use Claude attribution, not auto-detected model')
+      assert.ok(!body.includes('Claude Opus'),
+        'should not contain auto-detected model name')
+    } finally {
+      delete process.env.CLAUDECODE
+    }
+  })
+
   it('creates watermark file after commit', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
@@ -1187,5 +1217,168 @@ describe('resolveCoauthor', () => {
 
   it('returns null when model is not in transcript (auto-detect)', () => {
     assert.equal(resolveCoauthor({}, '/dev/null'), null)
+  })
+
+  it('uses Claude attribution when coauthor not set and CLAUDECODE=1', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-home-'))
+    const claudeDir = path.join(home, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify({
+      attribution: { commit: 'Co-Authored-By: Claude <claude@anthropic.com>' }
+    }))
+    const origHome = process.env.HOME
+    process.env.HOME = home
+    process.env.CLAUDECODE = '1'
+    try {
+      assert.equal(
+        resolveCoauthor({}, '/dev/null', '/nonexistent'),
+        'Co-Authored-By: Claude <claude@anthropic.com>'
+      )
+    } finally {
+      process.env.HOME = origHome
+      delete process.env.CLAUDECODE
+    }
+  })
+
+  it('returns null when Claude attribution.commit is empty string', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-home-'))
+    const claudeDir = path.join(home, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify({
+      attribution: { commit: '' }
+    }))
+    const origHome = process.env.HOME
+    process.env.HOME = home
+    process.env.CLAUDECODE = '1'
+    try {
+      assert.equal(resolveCoauthor({}, '/dev/null', '/nonexistent'), null)
+    } finally {
+      process.env.HOME = origHome
+      delete process.env.CLAUDECODE
+    }
+  })
+
+  it('falls through to auto-detect when Claude settings have no attribution key', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-home-'))
+    const claudeDir = path.join(home, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify({}))
+    const origHome = process.env.HOME
+    process.env.HOME = home
+    process.env.CLAUDECODE = '1'
+    try {
+      // No attribution key → falls through to tier 3 (auto-detect), which returns null for /dev/null
+      assert.equal(resolveCoauthor({}, '/dev/null', '/nonexistent'), null)
+    } finally {
+      process.env.HOME = origHome
+      delete process.env.CLAUDECODE
+    }
+  })
+})
+
+describe('readClaudeAttribution', () => {
+  it('returns undefined when CLAUDECODE not set', () => {
+    const orig = process.env.CLAUDECODE
+    delete process.env.CLAUDECODE
+    try {
+      assert.equal(readClaudeAttribution('/tmp'), undefined)
+    } finally {
+      if (orig !== undefined) process.env.CLAUDECODE = orig
+    }
+  })
+
+  it('returns undefined when settings file does not exist', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-home-'))
+    const origHome = process.env.HOME
+    process.env.HOME = home
+    process.env.CLAUDECODE = '1'
+    try {
+      assert.equal(readClaudeAttribution('/nonexistent'), undefined)
+    } finally {
+      process.env.HOME = origHome
+      delete process.env.CLAUDECODE
+    }
+  })
+
+  it('returns undefined when attribution key is absent', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-home-'))
+    const claudeDir = path.join(home, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify({ other: true }))
+    const origHome = process.env.HOME
+    process.env.HOME = home
+    process.env.CLAUDECODE = '1'
+    try {
+      assert.equal(readClaudeAttribution('/nonexistent'), undefined)
+    } finally {
+      process.env.HOME = origHome
+      delete process.env.CLAUDECODE
+    }
+  })
+
+  it('returns empty string when attribution.commit is empty string', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-home-'))
+    const claudeDir = path.join(home, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify({
+      attribution: { commit: '' }
+    }))
+    const origHome = process.env.HOME
+    process.env.HOME = home
+    process.env.CLAUDECODE = '1'
+    try {
+      assert.equal(readClaudeAttribution('/nonexistent'), '')
+    } finally {
+      process.env.HOME = origHome
+      delete process.env.CLAUDECODE
+    }
+  })
+
+  it('returns the full string when attribution.commit has a value', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-home-'))
+    const claudeDir = path.join(home, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify({
+      attribution: { commit: 'Co-Authored-By: Claude <claude@anthropic.com>' }
+    }))
+    const origHome = process.env.HOME
+    process.env.HOME = home
+    process.env.CLAUDECODE = '1'
+    try {
+      assert.equal(
+        readClaudeAttribution('/nonexistent'),
+        'Co-Authored-By: Claude <claude@anthropic.com>'
+      )
+    } finally {
+      process.env.HOME = origHome
+      delete process.env.CLAUDECODE
+    }
+  })
+
+  it('project settings override global settings', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-home-'))
+    const globalClaudeDir = path.join(home, '.claude')
+    fs.mkdirSync(globalClaudeDir, { recursive: true })
+    fs.writeFileSync(path.join(globalClaudeDir, 'settings.json'), JSON.stringify({
+      attribution: { commit: 'Co-Authored-By: Global <global@example.com>' }
+    }))
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-proj-'))
+    const projectClaudeDir = path.join(root, '.claude')
+    fs.mkdirSync(projectClaudeDir, { recursive: true })
+    fs.writeFileSync(path.join(projectClaudeDir, 'settings.json'), JSON.stringify({
+      attribution: { commit: 'Co-Authored-By: Project <project@example.com>' }
+    }))
+    const origHome = process.env.HOME
+    process.env.HOME = home
+    process.env.CLAUDECODE = '1'
+    try {
+      assert.equal(
+        readClaudeAttribution(root),
+        'Co-Authored-By: Project <project@example.com>'
+      )
+    } finally {
+      process.env.HOME = origHome
+      delete process.env.CLAUDECODE
+    }
   })
 })
