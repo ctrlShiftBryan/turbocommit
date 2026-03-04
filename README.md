@@ -2,11 +2,17 @@
 
 # turbocommit
 
-Auto-commit after every Claude Code turn.
+turbocommit creates a git commit containing everything Claude Code changes 
+on each turn. Think of it like save state in a game emulator: whenever you 
+fall in a pit, you can safely rewind and try again.
 
-Captures every prompt/response exchange as a git commit so you never lose
-track of what you were doing across sessions and your progress is protected
-even when Claude's checkpoint system misbehaves.
+Captures every prompt/response transcript for the associated changes so you 
+and your agent never lose the thread on what you were doing after the fact,
+even if you didn't leave behind any comments or docs.
+
+Each commit also [links back to the previous commit from the same Claude Code
+session](#continuity-across-workstreams), so you can run multiple agent 
+sessions concurrently and detangle which agent committed what after the fact.
 
 ## How it works
 
