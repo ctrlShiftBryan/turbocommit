@@ -5,6 +5,18 @@
     "lib/**/*.js",
     "test/**/*.js"
   ],
+  "taskAllowedTools": [
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "Bash",
+    "WebFetch",
+    "WebSearch",
+    "Task",
+    "NotebookEdit"
+  ],
   "hooks": [
     {
       "type": "claude",
@@ -13,7 +25,7 @@
         {
           "name": "session-briefing",
           "type": "script",
-          "command": "prove_it run_builtin session:briefing",
+          "command": "$(prove_it prefix)/libexec/briefing",
           "quiet": true
         }
       ]
@@ -26,8 +38,14 @@
         {
           "name": "lock-config",
           "type": "script",
-          "command": "prove_it run_builtin config:lock",
-          "quiet": true
+          "command": "$(prove_it prefix)/libexec/guard-config",
+          "quiet": true,
+          "params": {
+            "paths": [
+              ".claude/prove_it/config.json",
+              ".claude/prove_it/config.local.json"
+            ]
+          }
         }
       ]
     },
@@ -67,15 +85,26 @@
           }
         },
         {
-          "name": "shipworthy-review",
+          "name": "done-review",
           "type": "agent",
           "parallel": true,
           "promptType": "skill",
-          "prompt": "prove-shipworthy",
+          "prompt": "prove-done",
           "model": "opus",
-          "ruleFile": ".claude/rules/testing.md",
+          "ruleFile": ".claude/rules/done.md",
           "when": {
             "signal": "done"
+          }
+        },
+        {
+          "name": "approach-review",
+          "type": "agent",
+          "parallel": true,
+          "promptType": "skill",
+          "prompt": "prove-approach",
+          "model": "sonnet",
+          "when": {
+            "signal": "stuck"
           }
         }
       ]
@@ -95,5 +124,5 @@
       ]
     }
   ],
-  "initSeed": "1768cb7bf5e8"
+  "initSeed": "4ae27b5ff2ad"
 }
