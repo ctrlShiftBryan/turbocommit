@@ -1,5 +1,5 @@
 {
-  "name": "turbocommit",
+  "name": "@searls/turbocommit",
   "version": "0.10.0",
   "description": "Auto-commit after every Claude Code turn",
   "bin": {
