@@ -4,7 +4,7 @@ const fs = require('fs')
 const path = require('path')
 const os = require('os')
 const { execSync } = require('child_process')
-const { run, formatModelName, resolveCoauthor, readClaudeAttribution } = require('../lib/run')
+const { run, formatModelName, resolveCoauthor, readClaudeAttribution, condensePairs } = require('../lib/run')
 const { handleTrack } = require('../lib/track')
 const { savePending, chainDir, saveWatermark, readWatermark } = require('../lib/session')
 const { ensureDir } = require('../lib/io')
@@ -1506,5 +1506,100 @@ describe('readClaudeAttribution', () => {
       process.env.HOME = origHome
       delete process.env.CLAUDECODE
     }
+  })
+})
+
+describe('condensePairs', () => {
+  it('condenses hook feedback prompt via agent', () => {
+    const hookText = 'Stop hook feedback:\n' + 'x'.repeat(300)
+    const pairs = [{ prompt: hookText, response: 'ok' }]
+    condensePairs('/tmp', { condense: { command: 'echo "Build passed with warnings"' } }, pairs)
+    assert.equal(pairs[0].prompt, 'Build passed with warnings')
+  })
+
+  it('leaves short hook feedback untouched', () => {
+    const hookText = 'Stop hook feedback:\nShort'
+    const pairs = [{ prompt: hookText, response: 'ok' }]
+    condensePairs('/tmp', {}, pairs)
+    assert.equal(pairs[0].prompt, hookText)
+  })
+
+  it('leaves non-hook prompts unaffected', () => {
+    const pairs = [{ prompt: 'Fix the bug in auth module', response: 'Done' }]
+    condensePairs('/tmp', { condense: { command: 'echo "should not appear"' } }, pairs)
+    assert.equal(pairs[0].prompt, 'Fix the bug in auth module')
+  })
+
+  it('falls back to truncation on agent failure', () => {
+    const hookText = 'Stop hook feedback:\n' + Array.from({ length: 20 }, (_, i) => `line${i} ${'x'.repeat(20)}`).join('\n')
+    const pairs = [{ prompt: hookText, response: 'ok' }]
+    condensePairs('/tmp', { condense: { command: 'bash -c "exit 1"' } }, pairs)
+    assert.ok(pairs[0].prompt.includes('Stop hook feedback:'))
+    assert.ok(pairs[0].prompt.includes('[...'))
+    assert.ok(pairs[0].prompt.includes('truncated]'))
+  })
+
+  it('respects custom minLength', () => {
+    const hookText = 'Stop hook feedback:\n' + 'x'.repeat(50)
+    const pairs = [{ prompt: hookText, response: 'ok' }]
+    condensePairs('/tmp', { condense: { minLength: 10, command: 'echo "condensed"' } }, pairs)
+    assert.equal(pairs[0].prompt, 'condensed')
+  })
+})
+
+describe('run condense integration', () => {
+  let realHome
+  before(() => { realHome = process.env.HOME })
+  beforeEach(() => { process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-home-')) })
+  after(() => { process.env.HOME = realHome })
+
+  it('condenses hook feedback in commit body', () => {
+    const dir = makeRepo()
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true,
+      title: { type: 'transcript' },
+      body: { type: 'transcript' },
+      condense: { command: 'echo "Build passed, 2 warnings"' }
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
+    const hookText = 'Stop hook feedback:\n' + 'x'.repeat(300)
+    const transcript = makeTranscript([{ prompt: hookText, response: 'acknowledged' }])
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1')
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    const body = lastBody(dir)
+    assert.ok(body.includes('Build passed, 2 warnings'))
+    assert.ok(!body.includes('x'.repeat(100)))
+  })
+
+  it('skips condensing when condense.enabled is false', () => {
+    const dir = makeRepo()
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true,
+      title: { type: 'transcript' },
+      body: { type: 'transcript' },
+      condense: { enabled: false }
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
+    const hookText = 'Stop hook feedback:\n' + 'x'.repeat(300)
+    const transcript = makeTranscript([{ prompt: hookText, response: 'acknowledged' }])
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1')
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    const body = lastBody(dir)
+    // Raw hook text preserved when condensing disabled
+    assert.ok(body.includes('x'.repeat(100)))
   })
 })

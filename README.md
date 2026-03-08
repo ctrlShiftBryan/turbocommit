@@ -187,6 +187,21 @@ Here's every property with its default:
     // other structured content are preserved verbatim.
     // false/absent → no wrapping (default).
     "maxLineLength": false
+  },
+
+  "condense": {
+    // Summarize verbose stop-hook feedback before agents see it.
+    // true/absent → enabled (default), false → disabled
+    "enabled": true,
+
+    // Command for condensing.
+    "command": "claude -p --model haiku",
+
+    // Prompt template. {{transcript}} = raw hook output.
+    "prompt": "Summarize this CI/build/lint output in 2-4 sentences.\nFocus on: what checks ran, what passed, what failed, and key error details.\nDo not include raw logs or file paths.\n\nOutput:\n{{transcript}}\n\nRespond with ONLY the summary, nothing else.",
+
+    // Min chars to trigger condensing. Shorter feedback left as-is.
+    "minLength": 200
   }
 }
 ```
