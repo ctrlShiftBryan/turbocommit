@@ -38,14 +38,16 @@ describe('install', () => {
     assert.ok(ptGroup.matcher.includes('mcp__'))
   })
 
-  it('Stop hook uses turbocommit hook stop command', () => {
+  it('Stop hook uses node cli.js hook stop command', () => {
     const file = tmpSettings({})
     install(file)
     const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
     const stopHook = settings.hooks.Stop
       .flatMap(g => g.hooks)
       .find(h => h.command && h.command.includes('turbocommit'))
-    assert.equal(stopHook.command, 'turbocommit hook stop')
+    assert.ok(stopHook.command.includes('hook stop'), 'command should include "hook stop"')
+    assert.ok(stopHook.command.startsWith('node '), 'command should start with "node "')
+    assert.ok(stopHook.command.includes('cli.js'), 'command should reference cli.js')
   })
 
   it('creates own group after existing groups in each event', () => {
@@ -68,7 +70,7 @@ describe('install', () => {
     // Stop: existing + turbocommit
     assert.equal(settings.hooks.Stop.length, 2)
     assert.equal(settings.hooks.Stop[0].hooks[0].command, 'prove_it hook claude:Stop')
-    assert.equal(settings.hooks.Stop[1].hooks[0].command, 'turbocommit hook stop')
+    assert.ok(settings.hooks.Stop[1].hooks[0].command.includes('hook stop'))
     // PreToolUse: existing + turbocommit
     assert.equal(settings.hooks.PreToolUse.length, 2)
     assert.equal(settings.hooks.PreToolUse[0].hooks[0].command, 'prove_it hook claude:PreToolUse')
@@ -116,9 +118,9 @@ describe('install', () => {
       .flat()
       .flatMap(g => g.hooks)
       .map(h => h.command)
-    assert.ok(!allCommands.includes('turbocommit run'))
-    // New hooks should be installed
-    assert.ok(allCommands.includes('turbocommit hook stop'))
+    assert.ok(!allCommands.some(c => c === 'turbocommit run'))
+    // New hooks should be installed (node-based path)
+    assert.ok(allCommands.some(c => c.includes('hook stop') && c.startsWith('node ')))
   })
 
   it('preserves other non-turbocommit hooks', () => {

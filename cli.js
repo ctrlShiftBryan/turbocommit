@@ -27,10 +27,18 @@ Commands:
   --version, -v  Show version
 
 Usage:
-  turbocommit install     # set up the global hooks
-  turbocommit init        # enable in a project
-  turbocommit doctor      # verify everything is wired correctly
-  turbocommit monitor     # watch commits in real-time
+  node cli.js install     # set up the global hooks
+  node cli.js init        # enable in a project
+  node cli.js doctor      # verify everything is wired correctly
+  node cli.js monitor     # watch commits in real-time
+
+Install via skills.sh:
+  npx skills add ctrlshiftbryan/turbocommit
+  node ~/.claude/skills/turbocommit/cli.js install
+
+Install via git clone:
+  git clone https://github.com/ctrlShiftBryan/turbocommit ~/.claude/turbocommit
+  node ~/.claude/turbocommit/cli.js install
 `
 
 function main (argv) {
@@ -87,7 +95,7 @@ function cmdInstall () {
   console.log('')
   console.log('Next steps:')
   console.log('  1. Restart Claude Code (required)')
-  console.log('  2. Run: turbocommit init  in a repo to enable auto-commits')
+  console.log('  2. Run: node <path>/cli.js init  in a repo to enable auto-commits')
 }
 
 function cmdUninstall () {

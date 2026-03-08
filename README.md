@@ -35,24 +35,46 @@ context was buffered from ancestor sessions, it appears under a
 
 ## Install
 
+### Via skills.sh (recommended)
+
+```bash
+npx skills add ctrlshiftbryan/turbocommit
+node ~/.claude/skills/turbocommit/cli.js install
+```
+
+### Via git clone
+
+```bash
+git clone https://github.com/ctrlShiftBryan/turbocommit ~/.claude/turbocommit
+node ~/.claude/turbocommit/cli.js install
+```
+
+### Via npm global
+
+```bash
+npm install -g @searls/turbocommit
+turbocommit install
+```
+
+### Via brew
+
 ```bash
 brew install searlsco/tap/turbocommit
 turbocommit install
 ```
 
-Then enable it per-project:
+Then enable per-project:
 
 ```bash
 cd your-repo
-turbocommit init
+node <path-to-turbocommit>/cli.js init
 ```
 
 ## Uninstall
 
 ```bash
-turbocommit deinit     # disable in a project
-turbocommit uninstall  # remove the global hook
-brew uninstall turbocommit
+node <path>/cli.js deinit     # disable in a project
+node <path>/cli.js uninstall  # remove the global hooks
 ```
 
 ## Where turbocommit goes in your hook chain
@@ -68,14 +90,14 @@ anywhere — order doesn't matter since they never block.
 
 | Command | Description |
 |---------|-------------|
-| `turbocommit install` | Add hooks to `~/.claude/settings.json` |
-| `turbocommit uninstall` | Remove them |
-| `turbocommit init` | Create `.claude/turbocommit.json` in current repo |
-| `turbocommit deinit` | Remove it |
-| `turbocommit doctor` | Check hook and config health |
-| `turbocommit monitor` | Tail the event log (start/success/skip/fail) |
-| `turbocommit help` | Show usage |
-| `turbocommit --version` | Show version |
+| `node cli.js install` | Add hooks to `~/.claude/settings.json` |
+| `node cli.js uninstall` | Remove them |
+| `node cli.js init` | Create `.claude/turbocommit.json` in current repo |
+| `node cli.js deinit` | Remove it |
+| `node cli.js doctor` | Check hook and config health |
+| `node cli.js monitor` | Tail the event log (start/success/skip/fail) |
+| `node cli.js help` | Show usage |
+| `node cli.js --version` | Show version |
 
 ## Continuity across workstreams
 
