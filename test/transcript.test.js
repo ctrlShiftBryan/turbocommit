@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
 const os = require('os')
-const { parseTranscript, formatBody, formatTitleTranscript, extractHeadline, fallbackHeadline, extractModel } = require('../lib/transcript')
+const { parseTranscript, formatBody, formatTitleTranscript, extractHeadline, fallbackHeadline, extractModel, isHookFeedback, truncateHookFeedback } = require('../lib/transcript')
 
 function tmpJsonl (lines) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-transcript-'))
@@ -299,5 +299,65 @@ describe('extractModel', () => {
     const file = path.join(dir, 'transcript.jsonl')
     fs.writeFileSync(file, '')
     assert.equal(extractModel(file), null)
+  })
+})
+
+describe('isHookFeedback', () => {
+  it('returns true for stop hook feedback text', () => {
+    assert.equal(isHookFeedback('Stop hook feedback:\nSome output here'), true)
+  })
+
+  it('returns false for regular text', () => {
+    assert.equal(isHookFeedback('Fix the bug in auth'), false)
+  })
+
+  it('returns false for null', () => {
+    assert.equal(isHookFeedback(null), false)
+  })
+
+  it('returns false for undefined', () => {
+    assert.equal(isHookFeedback(undefined), false)
+  })
+
+  it('returns false for number', () => {
+    assert.equal(isHookFeedback(42), false)
+  })
+})
+
+describe('truncateHookFeedback', () => {
+  it('preserves short text under the line limit', () => {
+    const text = 'line1\nline2\nline3'
+    assert.equal(truncateHookFeedback(text), text)
+  })
+
+  it('preserves text at exactly the line limit', () => {
+    const text = 'line1\nline2\nline3\nline4'
+    assert.equal(truncateHookFeedback(text), text)
+  })
+
+  it('truncates long text with line count', () => {
+    const lines = Array.from({ length: 10 }, (_, i) => `line${i}`)
+    const text = lines.join('\n')
+    const result = truncateHookFeedback(text)
+    assert.ok(result.includes('line0'))
+    assert.ok(result.includes('line3'))
+    assert.ok(!result.includes('line4\n'))
+    assert.ok(result.includes('[... 6 lines truncated]'))
+  })
+
+  it('respects custom maxLines', () => {
+    const lines = Array.from({ length: 10 }, (_, i) => `line${i}`)
+    const text = lines.join('\n')
+    const result = truncateHookFeedback(text, 2)
+    assert.ok(result.includes('line0'))
+    assert.ok(result.includes('line1'))
+    assert.ok(result.includes('[... 8 lines truncated]'))
+  })
+
+  it('defaults to 4 lines', () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `L${i}`)
+    const result = truncateHookFeedback(lines.join('\n'))
+    const outputLines = result.split('\n')
+    assert.equal(outputLines.length, 5) // 4 content + 1 marker
   })
 })
