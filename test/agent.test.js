@@ -4,7 +4,8 @@ const {
   renderPrompt,
   runAgent,
   runTitleAgent,
-  runBodyAgent
+  runBodyAgent,
+  runCondenseAgent
 } = require('../lib/agent')
 
 describe('renderPrompt', () => {
@@ -156,5 +157,36 @@ describe('runBodyAgent', () => {
     const result = runBodyAgent('/tmp', { command: 'cat' }, 'the transcript')
     assert.ok(result.includes('the transcript'))
     assert.ok(result.includes('concise'))
+  })
+})
+
+describe('runCondenseAgent', () => {
+  it('uses the configured command', () => {
+    const result = runCondenseAgent('/tmp', { command: 'echo "Build passed, lint failed"' }, 'raw output')
+    assert.equal(result, 'Build passed, lint failed')
+  })
+
+  it('returns null on failure', () => {
+    const result = runCondenseAgent('/tmp', { command: 'bash -c "exit 1"' }, 'raw output')
+    assert.equal(result, null)
+  })
+
+  it('uses custom prompt template', () => {
+    const result = runCondenseAgent('/tmp', {
+      command: 'cat',
+      prompt: 'Condense: {{transcript}}'
+    }, 'hook output')
+    assert.equal(result, 'Condense: hook output')
+  })
+
+  it('uses default prompt template when none configured', () => {
+    const result = runCondenseAgent('/tmp', { command: 'cat' }, 'hook output')
+    assert.ok(result.includes('hook output'))
+    assert.ok(result.includes('Summarize'))
+  })
+
+  it('returns null for missing command binary', () => {
+    const result = runCondenseAgent('/tmp', { command: 'nonexistent_cmd_99999' }, 'text')
+    assert.equal(result, null)
   })
 })
