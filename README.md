@@ -153,10 +153,10 @@ Here's every property with its default:
   "enabled": true,
 
   // Co-Authored-By trailer.
-  //   true  → auto-detect model from transcript (default)
-  //   false → no trailer
+  //   false → no trailer (default)
+  //   true  → auto-detect model from transcript
   //   "Name <email>" → custom trailer value
-  "coauthor": true,
+  "coauthor": false,
 
   "title": {
     // "agent" (default) → run a title agent to generate the headline
@@ -168,20 +168,20 @@ Here's every property with its default:
 
     // Prompt template sent to the title agent. Use {{transcript}} as the
     // placeholder for the session transcript.
-    "prompt": "You have 10 seconds. Write a single-line git commit headline (max 72 chars) from this coding session transcript. Speed over perfection — a rough title beats no title.\n\nRules:\n- Imperative mood (\"Add\", \"Fix\", \"Update\")\n- Specific about what changed\n- No trailing period\n- No conventional commit prefixes unless clearly a fix/feat\n\nTranscript:\n{{transcript}}\n\nRespond with ONLY the headline, nothing else. Do not deliberate."
+    "prompt": "You have 10 seconds. Write a single-line git commit headline (max 72 chars) from this coding session transcript. Speed over perfection — a rough title beats no title.\n\nRules:\n- Conventional Commit format: type(scope): subject  or  type: subject\n- Allowed types: feat, fix, chore, refactor, docs, test, perf\n- Subject in imperative mood, lowercase start, no trailing period\n- Scope is optional — use when it clarifies the change\n\nTranscript:\n{{transcript}}\n\nRespond with ONLY the headline, nothing else. Do not deliberate."
   },
 
   "body": {
-    // "transcript" (default) → use the formatted prompt/response transcript
-    // "agent"                → run a body agent to summarize
-    "type": "transcript",
+    // "agent" (default)      → run a body agent to summarize
+    // "transcript"           → use the formatted prompt/response transcript
+    "type": "agent",
 
     // Command to run for body generation (only when type is "agent").
     "command": "claude -p --model haiku",
 
     // Prompt template sent to the body agent. Use {{transcript}} as the
     // placeholder for the session transcript.
-    "prompt": "Given this transcript of a coding session, write a concise git commit body.\n\nRules:\n- Summarize what was done and why\n- Be concise — a few sentences or bullet points\n- Focus on the \"why\" more than the \"what\"\n\nTranscript:\n{{transcript}}\n\nRespond with ONLY the commit body, nothing else.",
+    "prompt": "Given this transcript of a coding session, write a concise git commit body.\n\nRules:\n- First line: the exact first user prompt, verbatim\n- Then a blank line\n- Then a concise summary of what was done and why\n\nTranscript:\n{{transcript}}\n\nRespond with ONLY the commit body, nothing else.",
 
     // Wrap prose lines at this width. Code blocks, tables, headers, and
     // other structured content are preserved verbatim.

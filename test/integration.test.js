@@ -23,10 +23,8 @@ function makeProject (opts = {}) {
   fs.mkdirSync(claudeDir, { recursive: true })
 
   // turbocommit config — use transcript title to avoid extra API calls
-  fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
-    enabled: true,
-    title: { type: 'transcript' }
-  }, null, 2))
+  const tcConfig = opts.config || { enabled: true, title: { type: 'transcript' } }
+  fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify(tcConfig, null, 2))
 
   // Diagnostic hook that writes a file when Stop fires, proving hooks work
   const hookLog = path.join(dir, 'hook-fired.txt')
@@ -100,8 +98,10 @@ describe('integration', { skip: SKIP }, () => {
     assert.ok(after > before, `expected commits after turbocommit, got ${before} -> ${after}`)
   })
 
-  it('turbocommit appends co-authored-by trailer', () => {
-    const { dir } = makeProject()
+  it('turbocommit appends co-authored-by trailer when coauthor: true', () => {
+    const { dir } = makeProject({
+      config: { enabled: true, title: { type: 'transcript' }, coauthor: true }
+    })
 
     runClaude(dir, 'Create a file called test.txt containing "test". Use the Write tool.')
 
