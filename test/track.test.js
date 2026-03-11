@@ -3,6 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
 const os = require('os')
+const { execSync } = require('child_process')
 const { handleTrack, hasTrackedModifications, cleanupTracking, extractFilePath, trackingPath } = require('../lib/track')
 
 function tmpRoot () {
@@ -194,6 +195,40 @@ describe('cleanupTracking', () => {
     const root = tmpRoot()
     cleanupTracking(root, 'nonexistent')
     // No crash
+  })
+})
+
+describe('handleTrack in worktree', () => {
+  it('writes tracking file inside worktree git dir', () => {
+    // Create a real repo with a commit (worktree requires a commit)
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-wt-track-'))
+    execSync('git init', { cwd: repo, stdio: 'pipe' })
+    execSync('git config user.email "test@test.com"', { cwd: repo, stdio: 'pipe' })
+    execSync('git config user.name "Test"', { cwd: repo, stdio: 'pipe' })
+    fs.writeFileSync(path.join(repo, 'README.md'), 'hello')
+    execSync('git add -A && git commit -m "init"', { cwd: repo, stdio: 'pipe' })
+
+    // Create a worktree
+    const wtDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tc-wt-dir-')), 'wt')
+    execSync(`git worktree add "${wtDir}" -b test-track-wt`, { cwd: repo, stdio: 'pipe' })
+
+    // .git in the worktree should be a file, not a directory
+    const dotGit = path.join(wtDir, '.git')
+    assert.ok(fs.statSync(dotGit).isFile(), '.git should be a file in worktree')
+
+    // handleTrack should succeed (not silently fail)
+    const input = JSON.stringify({
+      session_id: 'wt-sess',
+      tool_name: 'Write',
+      tool_input: { file_path: '/tmp/foo.txt' }
+    })
+    handleTrack(input, wtDir)
+    assert.equal(hasTrackedModifications(wtDir, 'wt-sess'), true)
+
+    // Tracking file should be under the worktree's git dir, not under .git/
+    const trackFile = trackingPath(wtDir, 'wt-sess')
+    assert.ok(trackFile.includes(path.join('.git', 'worktrees')), `expected worktree path, got ${trackFile}`)
+    assert.ok(fs.existsSync(trackFile))
   })
 })
 

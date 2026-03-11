@@ -3,6 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
 const os = require('os')
+const { execSync } = require('child_process')
 const {
   handleSessionEnd,
   handleSessionStart,
@@ -356,6 +357,29 @@ describe('readWatermark / saveWatermark', () => {
     const wm = readWatermark(root, 'S1')
     assert.equal(wm.pairs, 7)
     assert.equal(wm.commit, 'second')
+  })
+})
+
+describe('worktree support', () => {
+  it('session dirs resolve inside worktree git dir', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-wt-sess-'))
+    execSync('git init', { cwd: repo, stdio: 'pipe' })
+    execSync('git config user.email "test@test.com"', { cwd: repo, stdio: 'pipe' })
+    execSync('git config user.name "Test"', { cwd: repo, stdio: 'pipe' })
+    fs.writeFileSync(path.join(repo, 'README.md'), 'hello')
+    execSync('git add -A && git commit -m "init"', { cwd: repo, stdio: 'pipe' })
+
+    const wtDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tc-wt-dir-')), 'wt')
+    execSync(`git worktree add "${wtDir}" -b test-sess-wt`, { cwd: repo, stdio: 'pipe' })
+
+    // breadcrumbDir should point into worktree's git dir
+    const bDir = breadcrumbDir(wtDir)
+    assert.ok(bDir.includes(path.join('.git', 'worktrees')), `expected worktree path, got ${bDir}`)
+
+    // handleSessionEnd should succeed
+    handleSessionEnd(JSON.stringify({ session_id: 'wt-A' }), wtDir)
+    const file = path.join(bDir, 'wt-A.json')
+    assert.ok(fs.existsSync(file))
   })
 })
 

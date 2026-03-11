@@ -5,7 +5,7 @@ const path = require('path')
 const os = require('os')
 const { execSync } = require('child_process')
 const {
-  gitRoot, hasChanges, addAndCommit, hasCommits, currentBranch
+  gitRoot, gitDir, hasChanges, addAndCommit, hasCommits, currentBranch
 } = require('../lib/git')
 
 function makeRepo () {
@@ -34,6 +34,28 @@ describe('gitRoot', () => {
   it('returns null for non-repo', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-nogit-'))
     assert.equal(gitRoot(dir), null)
+  })
+})
+
+describe('gitDir', () => {
+  it('returns .git dir for a normal repo', () => {
+    const dir = makeRepo()
+    const resolved = fs.realpathSync(dir)
+    assert.equal(gitDir(dir), path.join(resolved, '.git'))
+  })
+
+  it('returns worktree git dir for a worktree', () => {
+    const dir = makeRepoWithCommit()
+    const wtDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tc-wt-')), 'wt')
+    execSync(`git worktree add "${wtDir}" -b test-wt`, { cwd: dir, stdio: 'pipe' })
+    const result = gitDir(wtDir)
+    // Worktree git dir lives under main repo's .git/worktrees/
+    assert.ok(result.includes(path.join('.git', 'worktrees')), `expected worktree git dir, got ${result}`)
+  })
+
+  it('returns null for non-repo', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-nogit-'))
+    assert.equal(gitDir(dir), null)
   })
 })
 
