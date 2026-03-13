@@ -4,7 +4,7 @@ const fs = require('fs')
 const path = require('path')
 const os = require('os')
 const { execSync } = require('child_process')
-const { run, formatModelName, resolveCoauthor, readClaudeAttribution, condensePairs } = require('../lib/run')
+const { run, formatModelName, resolveCoauthor, readClaudeAttribution, condensePairs, PENDING_TAG } = require('../lib/run')
 const { handleTrack } = require('../lib/track')
 const { savePending, chainDir, saveWatermark, readWatermark } = require('../lib/session')
 const { ensureDir } = require('../lib/io')
@@ -17,12 +17,14 @@ function makeRepo () {
   return dir
 }
 
-function enableAndCommit (dir) {
+function enableAndCommit (dir, extra) {
   const claudeDir = path.join(dir, '.claude')
   fs.mkdirSync(claudeDir, { recursive: true })
   fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
     enabled: true,
-    title: { type: 'transcript' }
+    mode: 'sync',
+    title: { type: 'transcript' },
+    ...extra
   }))
   fs.writeFileSync(path.join(dir, 'README.md'), 'init')
   execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
@@ -288,6 +290,73 @@ describe('run', () => {
     assert.equal(commitCount(dir), 2)
   })
 
+  it('pushes after commit when autoPush is true and remote exists', () => {
+    const dir = makeRepo()
+    // Set up a bare remote
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-bare-'))
+    execSync('git init --bare', { cwd: bare, stdio: 'pipe' })
+    enableAndCommit(dir)
+    execSync(`git remote add origin "${bare}"`, { cwd: dir, stdio: 'pipe' })
+    execSync('git push -u origin HEAD', { cwd: dir, stdio: 'pipe' })
+    // Enable autoPush
+    fs.writeFileSync(path.join(dir, '.claude', 'turbocommit.json'), JSON.stringify({
+      enabled: true,
+      mode: 'sync',
+      autoPush: true,
+      title: { type: 'transcript' }
+    }))
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'new content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const transcript = makeTranscript([{ prompt: 'Add a file', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    assert.equal(commitCount(dir), 2)
+    // Verify remote has the commit
+    const localSha = execSync('git rev-parse HEAD', { cwd: dir, encoding: 'utf8' }).trim()
+    const remoteSha = execSync('git rev-parse HEAD', { cwd: bare, encoding: 'utf8' }).trim()
+    assert.equal(localSha, remoteSha)
+  })
+
+  it('does not push when autoPush is false (default)', () => {
+    const dir = makeRepo()
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-bare-'))
+    execSync('git init --bare', { cwd: bare, stdio: 'pipe' })
+    enableAndCommit(dir)
+    execSync(`git remote add origin "${bare}"`, { cwd: dir, stdio: 'pipe' })
+    execSync('git push -u origin HEAD', { cwd: dir, stdio: 'pipe' })
+    // autoPush not set (default false)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'new content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const transcript = makeTranscript([{ prompt: 'Add a file', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    assert.equal(commitCount(dir), 2)
+    // Remote should still be at the initial commit (1 commit behind)
+    const remoteCount = Number(execSync('git rev-list --count HEAD', { cwd: bare, encoding: 'utf8' }).trim())
+    assert.equal(remoteCount, 1)
+  })
+
+  it('does not push when autoPush is true but no remote exists', () => {
+    const dir = makeRepo()
+    enableAndCommit(dir)
+    fs.writeFileSync(path.join(dir, '.claude', 'turbocommit.json'), JSON.stringify({
+      enabled: true,
+      mode: 'sync',
+      autoPush: true,
+      title: { type: 'transcript' }
+    }))
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'new content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const transcript = makeTranscript([{ prompt: 'Add a file', response: 'Done.' }])
+    // Should not throw even with no remote
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    assert.equal(commitCount(dir), 2)
+  })
+
   it('picks up pending from ancestor sessions under ## Planning', () => {
     const dir = makeRepo()
     enableAndCommit(dir)
@@ -430,6 +499,7 @@ describe('run', () => {
     fs.mkdirSync(claudeDir, { recursive: true })
     fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
       enabled: true,
+      mode: 'sync',
       title: { command: 'echo "Agent default headline"' }
     }))
     fs.writeFileSync(path.join(dir, 'README.md'), 'init')
@@ -451,6 +521,7 @@ describe('run', () => {
     // Use `wc -c` to echo the byte count of stdin — proves what the agent receives
     fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
       enabled: true,
+      mode: 'sync',
       title: { command: 'wc -c' }
     }))
     fs.writeFileSync(path.join(dir, 'README.md'), 'init')
@@ -500,6 +571,7 @@ describe('run', () => {
     fs.mkdirSync(claudeDir, { recursive: true })
     fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
       enabled: true,
+      mode: 'sync',
       title: { type: 'agent', command: 'echo "Agent headline"' }
     }))
     fs.writeFileSync(path.join(dir, 'README.md'), 'init')
@@ -520,6 +592,7 @@ describe('run', () => {
     fs.mkdirSync(claudeDir, { recursive: true })
     fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
       enabled: true,
+      mode: 'sync',
       title: { type: 'transcript' },
       body: { type: 'agent', command: 'echo "Agent body text"' }
     }))
@@ -541,6 +614,7 @@ describe('run', () => {
     fs.mkdirSync(claudeDir, { recursive: true })
     fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
       enabled: true,
+      mode: 'sync',
       title: { type: 'agent', command: 'exit 1' },
       body: { type: 'agent', command: 'exit 1' }
     }))
@@ -568,6 +642,7 @@ describe('run', () => {
     fs.mkdirSync(globalDir, { recursive: true })
     fs.writeFileSync(path.join(globalDir, 'turbocommit.json'), JSON.stringify({
       enabled: true,
+      mode: 'sync',
       title: { type: 'agent', command: 'echo "Global title"' }
     }))
 
@@ -649,6 +724,7 @@ describe('run', () => {
     fs.mkdirSync(claudeDir, { recursive: true })
     fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
       enabled: true,
+      mode: 'sync',
       title: { type: 'transcript' },
       body: { type: 'agent', command: 'cat', prompt: '{{transcript}}' }
     }))
@@ -1146,6 +1222,7 @@ describe('run', () => {
     fs.mkdirSync(claudeDir, { recursive: true })
     fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
       enabled: true,
+      mode: 'sync',
       title: { type: 'transcript' },
       coauthor: false,
       body: { command: 'echo "Agent body default"' }
@@ -1559,6 +1636,7 @@ describe('run condense integration', () => {
     fs.mkdirSync(claudeDir, { recursive: true })
     fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
       enabled: true,
+      mode: 'sync',
       title: { type: 'transcript' },
       body: { type: 'transcript' },
       condense: { command: 'echo "Build passed, 2 warnings"' }
@@ -1601,5 +1679,189 @@ describe('run condense integration', () => {
     const body = lastBody(dir)
     // Raw hook text preserved when condensing disabled
     assert.ok(body.includes('x'.repeat(100)))
+  })
+})
+
+describe('run async mode', () => {
+  let realHome
+  before(() => { realHome = process.env.HOME })
+  beforeEach(() => {
+    process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-home-'))
+  })
+  after(() => { process.env.HOME = realHome })
+
+  function enableAsync (dir, extra) {
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true,
+      mode: 'async',
+      title: { type: 'transcript' },
+      ...extra
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+  }
+
+  it('commits with [tc-pending] tag in body', () => {
+    const dir = makeRepo()
+    enableAsync(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const transcript = makeTranscript([{ prompt: 'Add a file', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    const body = lastBody(dir)
+    assert.ok(body.includes(PENDING_TAG), 'body should contain pending tag')
+    assert.ok(body.includes('Prompt:'), 'body should contain raw transcript')
+    assert.ok(body.includes('Add a file'))
+  })
+
+  it('uses transcript headline (no agent call)', () => {
+    const dir = makeRepo()
+    enableAsync(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const transcript = makeTranscript([{ prompt: 'Implement auth flow', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    assert.equal(lastSubject(dir), 'Implement auth flow')
+  })
+
+  it('saves refine manifest', () => {
+    const dir = makeRepo()
+    enableAsync(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const transcript = makeTranscript([{ prompt: 'Do thing', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    const sha = execSync('git rev-parse HEAD', { cwd: dir, encoding: 'utf8' }).trim()
+    const manifestPath = path.join(dir, '.git', 'turbocommit', 'refine', sha + '.json')
+    assert.ok(fs.existsSync(manifestPath), 'manifest should exist')
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+    assert.equal(manifest.sha, sha)
+    assert.equal(manifest.sessionId, 'S1')
+    assert.ok(Array.isArray(manifest.effectivePairs))
+  })
+
+  it('logs fast-commit event instead of success', () => {
+    const dir = makeRepo()
+    enableAsync(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const transcript = makeTranscript([{ prompt: 'Do thing', response: 'Done.' }])
+
+    const { logPath } = require('../lib/log')
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    const entries = fs.readFileSync(logPath(), 'utf8').trim().split('\n').map(l => JSON.parse(l))
+    const events = entries.map(e => e.event)
+    assert.ok(events.includes('start'))
+    assert.ok(events.includes('fast-commit'))
+    assert.ok(!events.includes('success'), 'no success event in async mode')
+  })
+
+  it('saves watermark after fast commit', () => {
+    const dir = makeRepo()
+    enableAsync(dir)
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const transcript = makeTranscript([{ prompt: 'Do', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    const wm = readWatermark(dir, 'S1')
+    assert.ok(wm)
+    assert.equal(wm.pairs, 1)
+    const head = execSync('git rev-parse HEAD', { cwd: dir, encoding: 'utf8' }).trim()
+    assert.equal(wm.commit, head)
+  })
+
+  it('includes continuation ref in async body', () => {
+    const dir = makeRepo()
+    enableAsync(dir)
+
+    // First commit
+    fs.writeFileSync(path.join(dir, 'file1.txt'), 'v1')
+    trackWrite(dir, 'S1', path.join(dir, 'file1.txt'))
+    const t1 = makeTranscript([{ prompt: 'First', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: t1, session_id: 'S1' }))
+    })
+    const firstSha = execSync('git rev-parse HEAD', { cwd: dir, encoding: 'utf8' }).trim()
+
+    // Second commit in same session
+    fs.writeFileSync(path.join(dir, 'file2.txt'), 'v2')
+    trackWrite(dir, 'S1', path.join(dir, 'file2.txt'))
+    const t2 = makeTranscript([
+      { prompt: 'First', response: 'Done.' },
+      { prompt: 'Second', response: 'Done again.' }
+    ])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: t2, session_id: 'S1' }))
+    })
+    const body = lastBody(dir)
+    assert.ok(body.includes(`Continuation of ${firstSha.slice(0, 7)}`))
+  })
+
+  it('includes planning sections in async body', () => {
+    const dir = makeRepo()
+    enableAsync(dir)
+
+    savePending(dir, 'A', 'Prompt:\nResearch\n\nResponse:\nFindings')
+    writeChain(dir, 'B', 'A', ['A'])
+    trackWrite(dir, 'B', path.join(dir, 'result.txt'))
+    fs.writeFileSync(path.join(dir, 'result.txt'), 'done')
+
+    const transcript = makeTranscript([{ prompt: 'Implement', response: 'Created.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'B' }))
+    })
+
+    const body = lastBody(dir)
+    assert.ok(body.includes(PENDING_TAG))
+    assert.ok(body.includes('## Planning'))
+    assert.ok(body.includes('## Implementation'))
+    assert.ok(body.includes('Research'))
+  })
+
+  it('async is default when mode not specified', () => {
+    const dir = makeRepo()
+    const claudeDir = path.join(dir, '.claude')
+    fs.mkdirSync(claudeDir, { recursive: true })
+    // No mode specified — should default to async
+    fs.writeFileSync(path.join(claudeDir, 'turbocommit.json'), JSON.stringify({
+      enabled: true,
+      title: { type: 'transcript' }
+    }))
+    fs.writeFileSync(path.join(dir, 'README.md'), 'init')
+    execSync('git add -A && git commit -m "Initial"', { cwd: dir, stdio: 'pipe' })
+
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const transcript = makeTranscript([{ prompt: 'Do thing', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    const body = lastBody(dir)
+    assert.ok(body.includes(PENDING_TAG), 'default mode should be async')
+  })
+
+  it('includes coauthor trailer in async body', () => {
+    const dir = makeRepo()
+    enableAsync(dir, { coauthor: 'Bot <bot@x.com>' })
+    fs.writeFileSync(path.join(dir, 'file.txt'), 'content')
+    trackWrite(dir, 'S1', path.join(dir, 'file.txt'))
+    const transcript = makeTranscript([{ prompt: 'Do', response: 'Done.' }])
+    withCwd(dir, () => {
+      run(JSON.stringify({ transcript_path: transcript, session_id: 'S1' }))
+    })
+    const body = lastBody(dir)
+    assert.ok(body.includes('Co-Authored-By: Bot <bot@x.com>'))
   })
 })

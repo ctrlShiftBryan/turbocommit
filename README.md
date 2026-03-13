@@ -152,6 +152,15 @@ Here's every property with its default:
   // Required. turbocommit is inert unless this is true.
   "enabled": true,
 
+  // "async" (default) → instant commit, background LLM refinement
+  // "sync"            → blocking LLM calls before commit (original behavior)
+  "mode": "async",
+
+  // Push to remote after each commit.
+  // Requires a remote named "origin". Failures are silent.
+  // In async mode, push happens after background refinement completes.
+  "autoPush": false,
+
   // Co-Authored-By trailer.
   //   false → no trailer (default)
   //   true  → auto-detect model from transcript

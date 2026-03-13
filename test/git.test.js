@@ -5,7 +5,8 @@ const path = require('path')
 const os = require('os')
 const { execSync } = require('child_process')
 const {
-  gitRoot, gitDir, hasChanges, addAndCommit, hasCommits, currentBranch
+  gitRoot, gitDir, hasChanges, addAndCommit, hasCommits, currentBranch,
+  hasRemote, push
 } = require('../lib/git')
 
 function makeRepo () {
@@ -130,5 +131,45 @@ describe('currentBranch', () => {
   it('returns HEAD for non-repo directory', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-nogit-'))
     assert.equal(currentBranch(dir), 'HEAD')
+  })
+})
+
+describe('hasRemote', () => {
+  it('returns false for repo with no remote', () => {
+    const dir = makeRepoWithCommit()
+    assert.equal(hasRemote(dir), false)
+  })
+
+  it('returns true for repo with a remote', () => {
+    const dir = makeRepoWithCommit()
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-bare-'))
+    execSync('git init --bare', { cwd: bare, stdio: 'pipe' })
+    execSync(`git remote add origin "${bare}"`, { cwd: dir, stdio: 'pipe' })
+    assert.equal(hasRemote(dir), true)
+  })
+})
+
+describe('push', () => {
+  it('pushes commit to remote', () => {
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-bare-'))
+    execSync('git init --bare', { cwd: bare, stdio: 'pipe' })
+    const dir = makeRepoWithCommit()
+    execSync(`git remote add origin "${bare}"`, { cwd: dir, stdio: 'pipe' })
+    execSync('git push -u origin HEAD', { cwd: dir, stdio: 'pipe' })
+    // Add another commit then push via our function
+    fs.writeFileSync(path.join(dir, 'new.txt'), 'content')
+    addAndCommit(dir, 'second', 'body')
+    push(dir)
+    const localSha = execSync('git rev-parse HEAD', { cwd: dir, encoding: 'utf8' }).trim()
+    const remoteSha = execSync('git rev-parse HEAD', { cwd: bare, encoding: 'utf8' }).trim()
+    assert.equal(localSha, remoteSha)
+  })
+
+  it('does nothing on detached HEAD', () => {
+    const dir = makeRepoWithCommit()
+    const sha = execSync('git rev-parse HEAD', { cwd: dir, encoding: 'utf8' }).trim()
+    execSync(`git checkout ${sha}`, { cwd: dir, stdio: 'pipe', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })
+    // Should not throw
+    push(dir)
   })
 })

@@ -4,6 +4,7 @@ const { readStdin } = require('./lib/io')
 const { install, uninstall } = require('./lib/install')
 const { init, deinit } = require('./lib/init')
 const { run } = require('./lib/run')
+const { refine } = require('./lib/refine')
 const { handleTrack } = require('./lib/track')
 const { handleSessionStart, handleSessionEnd } = require('./lib/session')
 const { doctor } = require('./lib/doctor')
@@ -172,6 +173,10 @@ function cmdHook (argv) {
       case 'stop':
         run(input)
         break
+      case 'refine':
+        // Refine reads manifest path from argv, not stdin
+        refine(argv[1])
+        return
       default:
         // Unknown hook event — ignore silently (never fail)
         break
