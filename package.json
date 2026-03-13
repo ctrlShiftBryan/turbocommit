@@ -1,6 +1,6 @@
 {
   "name": "@searls/turbocommit",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "description": "Auto-commit after every Claude Code turn",
   "bin": {
     "turbocommit": "./cli.js"
@@ -24,7 +24,8 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.js",
-    "lint": "npx standard --fix"
+    "lint": "npx standard --fix",
+    "prepare": "cp hooks/post-commit .git/hooks/post-commit && chmod +x .git/hooks/post-commit"
   },
   "devDependencies": {
     "standard": "^17.1.0"

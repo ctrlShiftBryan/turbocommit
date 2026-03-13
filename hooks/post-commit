@@ -1,0 +1,17 @@
+#!/bin/bash
+GUARD=".git/version-bumping"
+if [ -f "$GUARD" ]; then exit 0; fi
+touch "$GUARD"
+trap 'rm -f "$GUARD"' EXIT
+
+node -e "
+  const fs = require('fs');
+  const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+  const v = pkg.version.split('.');
+  v[2] = Number(v[2]) + 1;
+  pkg.version = v.join('.');
+  fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+"
+
+git add package.json
+git commit --amend --no-edit --no-verify
